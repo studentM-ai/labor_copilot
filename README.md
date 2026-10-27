@@ -1,2 +1,2 @@
-# jobcopilot
-秋招求职智能助手
+# labor_copilot
+求职权益智能助手
