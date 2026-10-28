@@ -1,50 +1,41 @@
 """
-测试查看与大致主题相关的法律看看够不够用
+关键词粗筛：主题里找劳动相关词
+
+只筛标题，一定会漏。所以正文高度相关、但标题不含关键词的法律（如《尘肺病防治条例》），交给 03补充。
 """
 import json
 import re
 
-index_file = open("data/raw/_index.json", encoding="utf-8")
-all_law_list = json.load(index_file)
-index_file.close()
+KW = re.compile(r"劳动|工伤|社会保险|工资|就业|女职工|工会|职业病|年休假|工作时间")
 
-#设置关键词
-keyword_rule = re.compile(r"劳动|工伤|社会保险|工资|就业|女职工|工会|职业病|年休假|工作时间")
+idx = json.load(open("data/raw/_index.json", encoding="utf-8"))
+hits = [x for x in idx if KW.search(x["title"])]    #标题关键词匹配
 
-# 新建一个列表，用来存放筛选出来的法律
-selected_law = []
-for one_law in all_law_list:
-    law_title = one_law["title"]
-    # 检查标题里有没有匹配到关键词
-    if keyword_rule.search(law_title):
-        selected_law.append(one_law)    #匹配到就加入列表
+out = [
+    {"id": x["id"], "title": x["title"],
+     "articleCount": x["articleCount"], "source": "keyword"}
+    for x in hits
+]
+json.dump(out, open("data/raw/_keyword_candidates.json", "w", encoding="utf-8"),
+          ensure_ascii=False, indent=2)
 
-print("相关法律:", len(selected_law), "部")
+print("关键词候选:", len(out), "部")
+print("总法条:", sum(x["articleCount"] for x in hits))
 
-#按法条数量排
+#使用条数排序
 def get_article_num(law_item):
     return law_item["articleCount"]
 
-selected_law_sorted = sorted(selected_law, key=get_article_num)
+#取前15条
+for x in sorted(hits, key=get_article_num)[-1:-16:-1]:
+    print(f"  {x['articleCount']:>4}条  {x['title']}")
+print("-" * 50)
 
-# 只拿法条数量最多的15条
-top15_law = selected_law_sorted[-1:-16:-1]
-
-# 循环打印
-
-for law in top15_law:
-    article_total = law["articleCount"] #条数
-    title = law["title"]
-    # :>4 让数字靠右对齐，排版整齐
-    print(f"  {article_total:>4}条  {title}")
-
-# 
-print("总法条数:", sum(law["articleCount"] for law in selected_law))
-
-# 相关法律: 31 部
+# 关键词候选: 31 部
+# 总法条: 1208
 #    107条  中华人民共和国劳动法
-#     98条  中华人民共和国社会保险法
 #     98条  中华人民共和国劳动合同法
+#     98条  中华人民共和国社会保险法
 #     88条  中华人民共和国职业病防治法
 #     70条  使用有毒物品作业场所劳动保护条例
 #     69条  中华人民共和国就业促进法
@@ -52,9 +43,9 @@ print("总法条数:", sum(law["articleCount"] for law in selected_law))
 #     64条  保障农民工工资支付条例
 #     63条  社会保险经办条例
 #     58条  中华人民共和国工会法
-#     54条  最高人民法院关于审理劳动争议案件适用法律问题的解释（一）
 #     54条  中华人民共和国劳动争议调解仲裁法
+#     54条  最高人民法院关于审理劳动争议案件适用法律问题的解释（一）
 #     48条  退役军人就业创业促进条例
 #     38条  中华人民共和国劳动合同法实施条例
 #     36条  劳动保障监察条例
-# 总法条数: 1208
+# --------------------------------------------------

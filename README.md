@@ -32,34 +32,45 @@
 | 原始出处 | 国家法律法规数据库（flk.npc.gov.cn）官方文本 |
 | 同步时间 | 2026-10-21 |
 | 全量语料 | 1,513 部法律 / 56,182 条法条 |
-| **本项目主库** | **27 部劳动权益相关法律 / 1,193 条法条** |
+| **本项目主库** | **30 部劳动权益相关法律 / 1,251 条法条** |
 | 检索粒度 | **一条法条 = 一个检索单元**，无需切块 |
 | 字数分布 | 最短 20 / 中位 87 / P90 210 / 最长 797 字 |
 | 覆盖范围 | 国家层面法律、行政法规、司法解释 |
 
-### 筛选方法
+### 筛选方法（五步管道，全部可复现）
 
-1. **关键词候选**：从 1,513 部法律的标题中粗筛候选范围
-2. **内容密度检测**：扫描全量 5.6 万条法条，统计每部法里劳动相关词条的密度，
-   找出「标题不含关键词但内容高度相关」的法律 —— 据此补入
-   《国务院关于职工工作时间的规定》
-3. **人工定界**：按用户会问的 8 类问题（工时 / 工资 / 社保 / 工伤 /
-   就业歧视 / 职业病 / 女职工保护 / 维权程序）确认最终名单，
-   每条附收录理由，见 `scripts/03_build.py` 顶部的白名单
+```
+01_scan.py           扫描全量 1513 部 → _index.json
+02_filter.py         标题关键词粗筛   → _keyword_candidates.json   (31 部)
+03_content_scan.py   正文密度扫描     → _content_candidates.json   (58 部)
+        ↓  合并去重 67 部
+04_select.py         自动规则 + 人工剔除 → _selected.json          (30 部)
+05_build.py          按名单展开       → articles.jsonl             (1,251 条)
+```
+
+**取舍分两步，都可查：**
+
+- **自动规则**：排除非劳动关系领域（公务员/军人/监狱/安全生产）、
+  密度 < 10% 的横向基本法、全文不足 3 条的零散批复
+- **人工剔除**：13 部，每条理由写在 `04_select.py` 的 `EXCLUDE` 字典里
+  （如「《中外合作办学条例》命中的是外籍教师聘用条款」「《船员条例》适用主体特殊」）
+
+**为什么不能只靠规则**：纯规则会跑出 43 部，含明显噪声——规则负责"别漏太多"，
+人负责"别收错"。
 
 ### 已知局限
 
 - **仅覆盖国家层面法律**：各省《劳动合同条例》等地方性法规不在数据集内
 - **部门规章覆盖不全**：人社部通知、批复等未系统收录
 - **数据时效**：截至 2026-10-21，之后新增或修订的法规需重新同步
-- **规模有限**：主库 1,193 条，指标置信区间较宽，故评估更关注
+- **规模有限**：主库 1,251 条，指标置信区间较宽，故评估更关注
   相对提升而非绝对值
 
 ---
 
 ## 快速开始
 
-**语料已随仓库提交**：`data/clean/articles.jsonl`（0.67 MB / 1,193 条法条）。
+**语料已随仓库提交**：`data/clean/articles.jsonl`（0.71 MB / 1,251 条法条）。
 clone 下来即可直接使用，**无需下载任何原始文件**。
 
 ```bash
@@ -75,14 +86,16 @@ cd data/raw
 git clone --depth 1 https://github.com/lttxzmj/chinese-law-corpus.git
 cd ../..
 
-python scripts/01_scan.py      # 扫描全量，生成 data/raw/_index.json
-python scripts/02_filter.py    # 可选：按主题粗筛，检查覆盖度是否够用
-python scripts/03_build.py     # 按白名单展开成法条级 JSONL
+python scripts/01_scan.py           # 扫描全量       → _index.json
+python scripts/02_filter.py         # 标题关键词候选 → _keyword_candidates.json
+python scripts/03_content_scan.py   # 正文密度候选   → _content_candidates.json
+python scripts/04_select.py         # 规则 + 人工剔除 → _selected.json（白名单）
+python scripts/05_build.py          # 按名单展开     → articles.jsonl
 ```
 
 若 GitHub 访问不畅，可直接下载
 [仓库 zip](https://github.com/lttxzmj/chinese-law-corpus/archive/refs/heads/master.zip)
-解压到 `data/raw/`，再执行上面两条命令。
+解压到 `data/raw/`，再执行上面的命令。
 
 产物：`data/clean/articles.jsonl`，每行一条法条。
 
@@ -92,11 +105,20 @@ python scripts/03_build.py     # 按白名单展开成法条级 JSONL
 
 ```
 data/
-  raw/            上游原始语料（约 33 MB，不提交；重建方式见上）
+  raw/                  上游原始语料（约 33 MB，不提交；重建方式见上）
+    _index.json               全量索引
+    _keyword_candidates.json  关键词候选
+    _content_candidates.json  正文密度候选
+    _selected.json            ★ 最终白名单（由 04_select.py 生成）
   clean/
-    articles.jsonl    法条级语料，1,193 条（提交，0.67 MB，核心资产）
-script_test/          数据管道：扫描 / 展开
-docs/             项目方案文档
+    articles.jsonl      法条级语料，1,251 条（提交，核心资产）
+scripts/
+  01_scan.py            扫描全量，生成索引
+  02_filter.py          标题关键词粗筛
+  03_content_scan.py    正文密度扫描
+  04_select.py          ★ 唯一做取舍的地方：规则 + 人工剔除
+  05_build.py           按白名单展开成法条级 JSONL
+explain/                开发日志
 ```
 
 ---
