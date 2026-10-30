@@ -1,0 +1,18 @@
+{
+  "miss_fields": 0,
+  "miss_effective_date": 326,
+  "miss_chapter": 164,
+  "status_distribution": {
+    "effective": 1251
+  },
+  "duplicate": 0,
+  "worse_len": 0,
+  "worse_date": 0,
+  "lost_core_laws": [],
+  "mismatch": 0,
+  "laws_output": 30,
+  "laws_whitelist": 30,
+  "passed": true,
+  "total_articles": 1251,
+  "total_laws": 30
+}

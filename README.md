@@ -2,7 +2,7 @@
 
 > 所处秋招的同学或者不懂法的人用大白话描述遭遇，它找到对应法条、翻译成人话、该算的帮你算。
 
-**当前进度**：W1 D1 —— 语料管道完成，检索与问答开发中
+**当前进度**：W1 D2 —— 语料管道、数据体检、检索基线已完成，问答链路开发中
 
 ---
 
@@ -16,7 +16,8 @@
 
 **能力清单**
 
-- [x] 法条级语料构建（当前阶段）
+- [x] 法条级语料构建（30 部 / 1,251 条）
+- [x] 数据体检与检索基线（定位四类失败原因）
 - [ ] 法条问答：检索 + 生成 + 法条引用
 - [ ] 权益计算：经济补偿金 / 试用期上限 / 加班费
 - [ ] 合同体检：逐条比对法条，输出风险清单
@@ -34,7 +35,7 @@
 | 全量语料 | 1,513 部法律 / 56,182 条法条 |
 | **本项目主库** | **30 部劳动权益相关法律 / 1,251 条法条** |
 | 检索粒度 | **一条法条 = 一个检索单元**，无需切块 |
-| 字数分布 | 最短 20 / 中位 87 / P90 210 / 最长 797 字 |
+| 字数分布 | 最短 20 / 中位 86 / 最长 797 字 |
 | 覆盖范围 | 国家层面法律、行政法规、司法解释 |
 
 ### 筛选方法（五步管道，全部可复现）
@@ -63,8 +64,25 @@
 - **仅覆盖国家层面法律**：各省《劳动合同条例》等地方性法规不在数据集内
 - **部门规章覆盖不全**：人社部通知、批复等未系统收录
 - **数据时效**：截至 2026-10-21，之后新增或修订的法规需重新同步
+- **施行日期不全**：上游 14 部行政法规的 `effectiveDate` 为空（326 / 1,251 条）。
+  保留原样，**未用公布日期顶替**——公布日 ≠ 施行日，冒充会让时效判断出错。
+  当前检索与生成均不使用该字段。
 - **规模有限**：主库 1,251 条，指标置信区间较宽，故评估更关注
   相对提升而非绝对值
+
+---
+
+## 检索现状
+
+10 个口语化问题，**纯字面匹配（BM25）只命中 3 个**。失败分四类：
+
+- **零匹配** —— 「年假」在语料里 0 条，所有文档得分相同，排序退化
+- **稀有词噪声** —— 「公司」仅 2 条而「用人单位」503 条，idf 过高，拉出无关条文
+- **二元组假阳性** —— 「仲裁员」被切成「仲裁/裁员」，导致"被裁员"全部命中仲裁庭条文
+- **语义错配** —— 问「多久结案」，答「多久申请」
+
+> 这四类就是 W2 的任务：Query 改写解决零匹配，向量检索解决假阳性，Rerank 解决错配。
+> 完整数据见 [`data/eval/bm25_baseline_result.md`](data/eval/bm25_baseline_result.md)。
 
 ---
 
@@ -86,11 +104,17 @@ cd data/raw
 git clone --depth 1 https://github.com/lttxzmj/chinese-law-corpus.git
 cd ../..
 
-python scripts/01_scan.py           # 扫描全量       → _index.json
-python scripts/02_filter.py         # 标题关键词候选 → _keyword_candidates.json
-python scripts/03_content_scan.py   # 正文密度候选   → _content_candidates.json
-python scripts/04_select.py         # 规则 + 人工剔除 → _selected.json（白名单）
-python scripts/05_build.py          # 按名单展开     → articles.jsonl
+python scripts/D1/01_scan.py           # 扫描全量       → _index.json
+python scripts/D1/02_filter.py         # 标题关键词候选 → _keyword_candidates.json
+python scripts/D1/03_content_scan.py   # 正文密度候选   → _content_candidates.json
+python scripts/D1/04_select.py         # 规则 + 人工剔除 → _selected.json（白名单）
+python scripts/D1/05_build.py          # 按名单展开     → articles.jsonl
+
+# 数据体检（可选，验证产物）
+python scripts/D2/06_check_data.py     # → data/eval/check_report.json
+
+# 检索冒烟测试（可选，验证"口语 vs 法条"的落差）
+python scripts/D2/07_bm25_baseline.py  # → data/eval/bm25_baseline_result.md
 ```
 
 若 GitHub 访问不畅，可直接下载
@@ -112,12 +136,19 @@ data/
     _selected.json            ★ 最终白名单（由 04_select.py 生成）
   clean/
     articles.jsonl      法条级语料，1,251 条（提交，核心资产）
+  eval/
+    check_report.json         数据体检报告
+    bm25_baseline_result.md   冒烟测试结果
 scripts/
-  01_scan.py            扫描全量，生成索引
-  02_filter.py          标题关键词粗筛
-  03_content_scan.py    正文密度扫描
-  04_select.py          ★ 唯一做取舍的地方：规则 + 人工剔除
-  05_build.py           按白名单展开成法条级 JSONL
+  D1/                   数据管道（五步）
+    01_scan.py            扫描全量，生成索引
+    02_filter.py          标题关键词粗筛
+    03_content_scan.py    正文密度扫描
+    04_select.py          ★ 唯一做取舍的地方：规则 + 人工剔除
+    05_build.py           按白名单展开成法条级 JSONL
+  D2/                   数据校验与检索基线
+    06_check_data.py      数据体检（五项检查）
+    07_bm25_baseline.py   术语落差表 + BM25 冒烟测试
 explain/                开发日志
 ```
 
