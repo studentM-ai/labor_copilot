@@ -135,7 +135,7 @@ def main():
     "---", ""]
 
   #总数  ok数 越界数 拒绝数 失败调用数
-  stats = {"total": 0, "cite_ok": 0, "cite_bad": 0,"refususeded": 0, "failed_call": 0}
+  stats = {"total": 0, "cite_ok": 0, "cite_bad": 0,"refused": 0, "failed_call": 0}
 
   #10个问题
   for qindx,(q,ref) in enumerate(QUESTIONS,1):
