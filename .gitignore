@@ -43,3 +43,4 @@ Thumbs.db
 .idea/
 .vscode/settings.json
 tempCodeRunnerFile.py
+data/output/claim.md
