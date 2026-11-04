@@ -1,0 +1,14 @@
+{"id": "q01", "question": "公司不给我交社保怎么办", "gold_law_ids": ["social-insurance-law-0058", "social-insurance-law-0063"], "type": "kouyu", "must_refuse": false}
+{"id": "q02", "question": "试用期最长能有多久", "gold_law_ids": ["labor-law-0021", "labor-contract-law-0019"], "type": "kouyu", "must_refuse": false}
+{"id": "q03", "question": "被裁员了能拿多少钱，我工作了 3 年半，月薪 12000", "gold_law_ids": ["labor-contract-law-0047"], "type": "kouyu", "must_refuse": false}
+{"id": "q04", "question": "加班费怎么算", "gold_law_ids": ["labor-law-0044"], "type": "kouyu", "must_refuse": false}
+{"id": "q05", "question": "公司让我签竞业协议合法吗", "gold_law_ids": ["labor-contract-law-0023", "labor-contract-law-0024"], "type": "kouyu", "must_refuse": false}
+{"id": "q06", "question": "工伤怎么认定", "gold_law_ids": ["xzfg-8e4ae5638e-0014"], "type": "kouyu", "must_refuse": false}
+{"id": "q07", "question": "年假有几天", "gold_law_ids": ["xzfg-df951803c0-0003"], "type": "kouyu", "must_refuse": false}
+{"id": "q08", "question": "女员工怀孕能被辞退吗", "gold_law_ids": ["xzfg-4eb3304079-0005"], "type": "kouyu", "must_refuse": false}
+{"id": "q09", "question": "劳动仲裁要多久", "gold_law_ids": ["labor-dispute-mediation-arbitration-law-0043"], "type": "kouyu", "must_refuse": false}
+{"id": "q10", "question": "拖欠工资找谁", "gold_law_ids": ["xzfg-2d114901d5-0009", "xzfg-f764e4b761-0010"], "type": "kouyu", "must_refuse": false}
+{"id": "q11", "question": "房东不退我押金怎么办", "gold_law_ids": [], "type": "out_of_scope", "must_refuse": true}
+{"id": "q12", "question": "延长工作时间 百分之一百五十 工资报酬", "gold_law_ids": ["labor-law-0044"], "type": "term", "must_refuse": false}
+{"id": "q13", "question": "裁减人员 二十人以上 提前三十日 说明情况", "gold_law_ids": ["labor-contract-law-0041"], "type": "term", "must_refuse": false}
+{"id": "q14", "question": "不能胜任工作 经过培训 调整工作岗位 提前三十日", "gold_law_ids": ["labor-contract-law-0040"], "type": "term", "must_refuse": false}

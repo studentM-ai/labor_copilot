@@ -3,7 +3,7 @@
 > 所处秋招的同学或者不懂法的人用大白话描述遭遇，它找到对应法条、翻译成人话、该算的帮你算。
 
 **当前进度**：语料管道、数据体检、检索基线、最小 RAG、向量检索、
-多工具 Agent、多轮对话与人工确认已完成；混合检索、合同体检与评估体系开发中
+多工具 Agent、多轮对话与人工确认、混合检索对比已完成；合同体检与评估体系开发中
 
 ---
 
@@ -23,10 +23,11 @@
 - [x] 向量检索替代字面匹配（答案正确 3/10 → 9/10）
 - [x] 多工具 Agent：模型自主改写检索词、自主调用计算工具
 - [x] 多轮对话 + 写操作人工确认（SqliteSaver 持久化，支持中断恢复）
+- [x] 混合检索对比（实测混合 10/13 < 纯向量 12/13，决定不引入）
 - [x] 经济补偿计算（《劳动合同法》第 47 条第一款，规则代码化）
 - [ ] 试用期上限 / 加班费计算
 - [ ] 合同体检：逐条比对法条，输出风险清单
-- [ ] 评估体系：分层测试集 + HitRate / MRR + Ragas
+- [ ] 评估体系：HitRate / MRR + Ragas（测试集 14 条已就绪）
 
 ---
 
@@ -238,6 +239,35 @@ START → agent ──(没有工具调用)──→ END
 
 ---
 
+### 混合检索对比
+
+同一批 13 道可判定题（10 道口语 + 3 道法条原词密集；1 道超范围不参与统计）：
+
+| 检索方式 | 命中 Top5 |
+|---|---|
+| BM25（字符二元组） | 7 / 13 |
+| 向量（bge-m3） | **12 / 13** |
+| 混合（RRF 等权融合） | 10 / 13 |
+
+**混合反而比纯向量少 2 题。**
+
+原因：RRF 等权融合假设两路质量相当，而实测 BM25（7/13）远弱于向量（12/13）。
+BM25 的 20 条候选里大量无关文档，它们的累计分把向量排第 1 的正确文档挤了下去。
+典型例子是「工伤怎么认定」：向量排第 1，混合后直接掉出 Top5。
+
+3 道「法条原词密集」题（如「延长工作时间 百分之一百五十」）三种方式全部打平——
+说明在 1,251 条这个规模上，向量对法条原词的理解已经够用，BM25 没有独特优势。
+
+**结论：当前规模不引入混合检索，保留纯向量。**
+若语料扩到 5.6 万条，向量在更大空间里更容易混淆，届时需重测，
+且应使用加权 RRF 而非等权。
+
+**同时固化了一份 14 条测试集**，带 gold 法条 id，作为后续评估的基线。
+
+> 完整数据见 [`data/eval/hybrid_eval_result.md`](data/eval/hybrid_eval_result.md)
+
+---
+
 ## 快速开始
 
 **语料已随仓库提交**：`data/clean/articles.jsonl`（0.71 MB / 1,251 条法条）。
@@ -275,8 +305,39 @@ python scripts/D2/07_bm25_baseline.py  # → data/eval/bm25_baseline_result.md
 
 产物：`data/clean/articles.jsonl`，每行一条法条。
 
----
+### 配置 API Key
 
+问答与 Agent 相关脚本需要 DeepSeek API Key（[申请地址](https://platform.deepseek.com/)）。
+在项目根目录建一个 `.env`（已在 `.gitignore` 中，不会被提交）：
+
+```bash
+DEEPSEEK_API_KEY=sk-xxxxxx
+```
+
+### 运行问答与 Agent
+
+`data/clean/articles_vec.npy`（4.9 MB）已随仓库提交，可直接用。
+若要重新生成（需先下载 bge-m3，约 2.2 GB）：
+
+```bash
+# 国内网络建议先设镜像
+#   PowerShell: $env:HF_ENDPOINT="https://hf-mirror.com"
+python scripts/D4/09_build_vectors.py
+```
+
+然后按需要跑任意一个（前三步产物是后一步的输入）：
+
+```bash
+python scripts/D3/08_easy_rag.py       # 字面检索版 RAG（答案正确 3/10）
+python scripts/D4/010_vector_rag.py    # 向量检索版 RAG（9/10）
+python scripts/D5/011_agent.py         # 多工具 Agent（自主改写检索词 + 计算）
+python scripts/D6/012_hitl.py          # 多轮对话 + 写操作人工确认
+
+# 检索对比与测试集（可选）
+python scripts/D7/013_hybrid_eval.py   # → hybrid_eval_result.md + golden_set.jsonl
+```
+
+---
 ## 目录结构
 
 ```
@@ -297,6 +358,8 @@ data/
     easy_rag_result.md        字面匹配的问答结果
     vector_rag_result.md      向量检索的问答结果
     agent_d5_result.md        Agent 的调用链与答案
+    hybrid_eval_result.md     三种检索的排名对比
+    golden_set.jsonl          14 条测试集（含 gold 法条 id）
 scripts/
   D1/                   数据管道（五步）
     01_scan.py            扫描全量，生成索引
@@ -316,6 +379,8 @@ scripts/
     011_agent.py          search_law / calc_severance 两个工具 + 引用池
   D6/                   多轮与人工确认
     012_hitl.py           SqliteSaver + interrupt 写操作确认
+  D7/                   混合检索对比
+    013_hybrid_eval.py    BM25 / 向量 / RRF 三方对比 + 测试集固化
 explain/                开发日志
 ```
 
