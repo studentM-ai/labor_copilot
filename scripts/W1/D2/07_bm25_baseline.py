@@ -118,7 +118,9 @@ def main():
     q_tokens=list(set(tokenize(q)))   #得到问题切分字符列表
 
     #给所有的法条打分，从高到低 取3个 （bm25分数，docs对象）
-    scored = [(bm25(q_tokens, d), d) for d in docs]
+    scored = []
+    for d in docs:
+      scored.append((bm25(q_tokens, d), d))
     scored.sort(key=lambda x:-x[0])
 
     print(f"[{qidx} {q}]")

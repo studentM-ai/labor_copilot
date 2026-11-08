@@ -86,7 +86,10 @@ class VectorRetriever:
     top_idx = np.argsort(-scores)[:k]
 
     # ④ 用下标取回对应的法条
-    return [self.rows[i] for i in top_idx]
+    result = []
+    for i in top_idx:
+      result.append(self.rows[i])
+    return result
 
 #把检索到的法条拼成prompt,传入问题与检索到的row
 def build_message(question,hints):

@@ -42,7 +42,10 @@ class VectorRetriever:
   def retrieve(self, query, k=TOP_K):
     q = self.model.encode([query], normalize_embeddings=True)[0]
     idx = np.argsort(-(self.vecs @ q))[:k]
-    return [self.rows[i] for i in idx]
+    result = []
+    for i in idx:
+      result.append(self.rows[i])
+    return result
 
 class RefPool:
   """全局引用池：多轮检索下编号不串台，按 id 去重"""

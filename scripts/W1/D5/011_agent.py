@@ -41,7 +41,10 @@ class VectorRetriever:
       scores=self.vecs@q    #计算余弦相似度
       #取topk个 分数最高的
       idx = np.argsort(-scores)[:k]
-      return [self.rows[i] for i in idx]
+      result = []
+      for i in idx:
+        result.append(self.rows[i])
+      return result
 
 
 #全局引用池 模型可能进行多次检索，如果没有这个它得到的编号会串台，这个是保证检索编号唯一

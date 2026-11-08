@@ -3,7 +3,8 @@
 > 所处秋招的同学或者不懂法的人用大白话描述遭遇，它找到对应法条、翻译成人话、该算的帮你算。
 
 **当前进度**：语料管道、数据体检、检索基线、最小 RAG、向量检索、
-多工具 Agent、多轮对话与人工确认、混合检索对比已完成；合同体检与评估体系开发中
+多工具 Agent、多轮对话与人工确认、混合检索对比、40 条测试集与检索评估、
+Ragas 生成评估已完成；合同体检开发中
 
 ---
 
@@ -23,11 +24,13 @@
 - [x] 向量检索替代字面匹配（答案正确 3/10 → 9/10）
 - [x] 多工具 Agent：模型自主改写检索词、自主调用计算工具
 - [x] 多轮对话 + 写操作人工确认（SqliteSaver 持久化，支持中断恢复）
-- [x] 混合检索对比（实测混合 10/13 < 纯向量 12/13，决定不引入）
 - [x] 经济补偿计算（《劳动合同法》第 47 条第一款，规则代码化）
+- [x] 混合检索对比（实测混合 10/13 < 纯向量 12/13，决定不引入）
+- [x] 40 条分层测试集（口语 18 / 术语 8 / 多步 8 / 超范围 6）
+- [x] 检索评估：HitRate@1/3/5 + MRR，按题型分组（向量 HitRate@5 = 0.735）
+- [x] 生成评估：Ragas faithfulness 0.919 / answer_relevancy 0.801（34 条，按题型分组）
 - [ ] 试用期上限 / 加班费计算
 - [ ] 合同体检：逐条比对法条，输出风险清单
-- [ ] 评估体系：HitRate / MRR + Ragas（测试集 14 条已就绪）
 
 ---
 
@@ -262,13 +265,94 @@ BM25 的 20 条候选里大量无关文档，它们的累计分把向量排第 1
 若语料扩到 5.6 万条，向量在更大空间里更容易混淆，届时需重测，
 且应使用加权 RRF 而非等权。
 
-**同时固化了一份 14 条测试集**，带 gold 法条 id，作为后续评估的基线。
+**同时固化了一份测试集**，带 gold 法条 id，作为后续评估的基线（后来扩到 40 条，见下一节）。
 
 > 完整数据见 [`data/eval/hybrid_eval_result.md`](data/eval/hybrid_eval_result.md)
 
 ---
 
+### 40 条测试集与检索评估
+
+W1 的 13 条是边做边挑的，命中率会被高估。扩到 40 条后重测：
+
+| 类型 | 条数 | 说明 |
+|---|---|---|
+| 口语（`kouyu`） | 18 | 用户会怎么问 |
+| 术语（`term`） | 8 | 查询词几乎逐字来自法条原文 |
+| **多步（`duobu`）** | **8** | 一个问题含两个法律问题，需要多次检索 |
+| 超范围（`out_of_scope`） | 6 | 不属劳动法，正确行为是拒答 |
+
+可判定题共 34 条（超范围题不参与命中统计）。
+
+| 检索方式 | HitRate@1 | HitRate@3 | HitRate@5 | MRR@5 |
+|---|---|---|---|---|
+| BM25（字符二元组） | 0.324 | 0.441 | 0.500 | 0.389 |
+| **向量（bge-m3）** | **0.441** | **0.618** | **0.735** | **0.546** |
+| 混合（RRF 等权） | 0.353 | 0.529 | 0.647 | 0.459 |
+
+按题型看向量检索：
+
+| 类型 | 条数 | HitRate@5 | MRR@5 |
+|---|---|---|---|
+| `kouyu` | 18 | 0.778 | 0.571 |
+| `term` | 8 | 0.875 | 0.719 |
+| `duobu` | 8 | **0.500** | **0.317** |
+
+**多步题明显最差，原因不是「难」，而是一次检索只能覆盖一个问题的一半。**
+例如「公司拖欠工资 3 个月，我能直接辞职并要补偿吗」同时涉及「拖欠工资」
+和「辞职+经济补偿」，单次检索只抓住了前者。这正是 Agent 需要多轮检索的理由。
+
+9 道未命中的题归为五类原因：
+
+| 类型 | 例子 | 机制 |
+|---|---|---|
+| 术语落差 | 「调岗降薪」 | 法条写的是「变更劳动合同」，字面零重合 |
+| 一问多义 | 「拖欠工资 + 辞职要补偿」 | 一次检索只覆盖一半 |
+| 否定表达 | 「没培训也没调岗」 | 法条写「经过培训…仍不能胜任」，向量对否定不敏感 |
+| 精确词缺失 | 「能要赔偿金吗」 | 法条写「加付赔偿金」，缺了这个词就搜不到 |
+| gold 标注偏窄 | 竞业协议未约定补偿 | 检索到司法解释（更贴题），但 gold 只标了基础法条 |
+
+> 完整数据与每道未命中题的实际 Top5 见
+> [`data/eval/retrieval_eval.md`](data/eval/retrieval_eval.md)
+
+---
+
+### 生成质量评估（Ragas）
+
+对 34 条可判定题评估生成质量，裁判模型同为 `deepseek-chat`：
+
+| 指标 | 全部 | 口语 18 | 术语 8 | 多步 8 |
+|---|---|---|---|---|
+| faithfulness | **0.919** | 0.922 | 0.975 | 0.857 |
+| answer_relevancy | **0.801** | 0.865 | 0.776 | 0.680 |
+
+**faithfulness** 衡量答案中的句子能否由给定法条原文推出。34 条中 16 条满分。
+剩余差距来自三类内容，都由指标定义决定，**不是编造**：
+
+| 类型 | 例子 | 为什么扣分 |
+|---|---|---|
+| 算术结果 | q27 的「经济补偿 48000 元」 | 由「每满一年一个月工资」算出，数字不在原文 |
+| 法律判断 | q34 的「不合法」 | 由「可以解除的条件」反推而来 |
+| 免责声明 | 「未找到相关依据」 | prompt 要求的正确行为，无原文支撑 |
+
+**answer_relevancy** 由答案反推问题、再与原问题比相似度。
+34 条中有 3 条（`q13` / `q30` / `q32`）得 0 分，原因是答案含「未找到相关依据」，
+被 Ragas 判为 noncommittal 直接给 0——**不是答非所问**；排除这 3 条后为 0.878。
+
+**一个必须接受的局限**：裁判模型的打分带随机性，同一批样本重复评估时
+faithfulness 波动约 ±0.015，单条题目的分数波动可达 ±0.1。
+因此**单条题目只用于定位线索，不用来下结论**。
+
+> 三层指标共同指向同一个短板——**多步题**：
+> 检索 HitRate@5 = 0.500，faithfulness = 0.857，answer_relevancy = 0.680。
+> 完整数据见 [`data/eval/ragas_eval.md`](data/eval/ragas_eval.md)
+
+---
+
 ## 快速开始
+
+> **依赖提示**：`requirements.txt` 里的版本已固定并验证可用，直接安装即可。
+> `langchain-community` 请保持 `0.3.30`，单独升级会和 `ragas` 不兼容。
 
 **语料已随仓库提交**：`data/clean/articles.jsonl`（0.71 MB / 1,251 条法条）。
 clone 下来即可直接使用，**无需下载任何原始文件**。
@@ -286,17 +370,17 @@ cd data/raw
 git clone --depth 1 https://github.com/lttxzmj/chinese-law-corpus.git
 cd ../..
 
-python scripts/D1/01_scan.py           # 扫描全量       → _index.json
-python scripts/D1/02_filter.py         # 标题关键词候选 → _keyword_candidates.json
-python scripts/D1/03_content_scan.py   # 正文密度候选   → _content_candidates.json
-python scripts/D1/04_select.py         # 规则 + 人工剔除 → _selected.json（白名单）
-python scripts/D1/05_build.py          # 按名单展开     → articles.jsonl
+python scripts/W1/D1/01_scan.py           # 扫描全量       → _index.json
+python scripts/W1/D1/02_filter.py         # 标题关键词候选 → _keyword_candidates.json
+python scripts/W1/D1/03_content_scan.py   # 正文密度候选   → _content_candidates.json
+python scripts/W1/D1/04_select.py         # 规则 + 人工剔除 → _selected.json（白名单）
+python scripts/W1/D1/05_build.py          # 按名单展开     → articles.jsonl
 
 # 数据体检（可选，验证产物）
-python scripts/D2/06_check_data.py     # → data/eval/check_report.json
+python scripts/W1/D2/06_check_data.py     # → data/eval/check_report.json
 
 # 检索冒烟测试（可选，验证"口语 vs 法条"的落差）
-python scripts/D2/07_bm25_baseline.py  # → data/eval/bm25_baseline_result.md
+python scripts/W1/D2/07_bm25_baseline.py  # → data/eval/bm25_baseline_result.md
 ```
 
 若 GitHub 访问不畅，可直接下载
@@ -322,19 +406,26 @@ DEEPSEEK_API_KEY=sk-xxxxxx
 ```bash
 # 国内网络建议先设镜像
 #   PowerShell: $env:HF_ENDPOINT="https://hf-mirror.com"
-python scripts/D4/09_build_vectors.py
+python scripts/W1/D4/09_build_vectors.py
 ```
 
 然后按需要跑任意一个（前三步产物是后一步的输入）：
 
 ```bash
-python scripts/D3/08_easy_rag.py       # 字面检索版 RAG（答案正确 3/10）
-python scripts/D4/010_vector_rag.py    # 向量检索版 RAG（9/10）
-python scripts/D5/011_agent.py         # 多工具 Agent（自主改写检索词 + 计算）
-python scripts/D6/012_hitl.py          # 多轮对话 + 写操作人工确认
+python scripts/W1/D3/08_easy_rag.py       # 字面检索版 RAG（答案正确 3/10）
+python scripts/W1/D4/010_vector_rag.py    # 向量检索版 RAG（9/10）
+python scripts/W1/D5/011_agent.py         # 多工具 Agent（自主改写检索词 + 计算）
+python scripts/W1/D6/012_hitl.py          # 多轮对话 + 写操作人工确认
 
 # 检索对比与测试集（可选）
-python scripts/D7/013_hybrid_eval.py   # → hybrid_eval_result.md + golden_set.jsonl
+python scripts/W1/D7/013_hybrid_eval.py   # → hybrid_eval_result.md（13 条子集对比）
+
+# 测试集与检索评估（40 条）
+python scripts/W2/D8/014_build_golden_set.py    # → data/eval/golden_set.jsonl
+python scripts/W2/D8/015_eval_retrieval.py       # → data/eval/retrieval_eval.md
+
+# 生成质量评估（会调很多次 LLM，先跑 2 条验证）
+python scripts/W2/D9/016_ragas_eval.py          # → data/eval/ragas_eval.md
 ```
 
 ---
@@ -359,28 +450,40 @@ data/
     vector_rag_result.md      向量检索的问答结果
     agent_d5_result.md        Agent 的调用链与答案
     hybrid_eval_result.md     三种检索的排名对比
-    golden_set.jsonl          14 条测试集（含 gold 法条 id）
-scripts/
-  D1/                   数据管道（五步）
-    01_scan.py            扫描全量，生成索引
-    02_filter.py          标题关键词粗筛
-    03_content_scan.py    正文密度扫描
-    04_select.py          ★ 唯一做取舍的地方：规则 + 人工剔除
-    05_build.py           按白名单展开成法条级 JSONL
-  D2/                   数据校验与检索基线
-    06_check_data.py      数据体检（五项检查）
-    07_bm25_baseline.py   术语落差表 + BM25 冒烟测试
-  D3/                   最小 RAG 链路
-    08_easy_rag.py        字面检索 + 生成 + 引用校验
-  D4/                   向量检索
-    09_build_vectors.py   编码 1,251 条法条 → articles_vec.npy
-    010_vector_rag.py     语义检索 + 生成 + 引用校验
-  D5/                   Agent（LangGraph + 工具调用）
-    011_agent.py          search_law / calc_severance 两个工具 + 引用池
-  D6/                   多轮与人工确认
-    012_hitl.py           SqliteSaver + interrupt 写操作确认
-  D7/                   混合检索对比
-    013_hybrid_eval.py    BM25 / 向量 / RRF 三方对比 + 测试集固化
+    retrieval_eval.md         40 条测试集的 HitRate / MRR
+    ragas_eval.md             Ragas 生成评估（faithfulness / answer_relevancy）
+    ragas_samples.jsonl       34 条评估样本（问题 + 答案 + 检索到的法条）
+    golden_set.jsonl          40 条测试集（含 gold 法条 id）
+  src/
+    retriever.py          BM25 / 向量 / 混合三种检索器（唯一实现）
+  scripts/
+    W1/                 第 1 周
+      D1/               数据管道（五步）
+        01_scan.py          扫描全量，生成索引
+        02_filter.py        标题关键词粗筛
+        03_content_scan.py  正文密度扫描
+        04_select.py        ★ 唯一做取舍的地方：规则 + 人工剔除
+        05_build.py         按白名单展开成法条级 JSONL
+      D2/               数据校验与检索基线
+        06_check_data.py    数据体检（五项检查）
+        07_bm25_baseline.py 术语落差表 + BM25 冒烟测试
+      D3/               最小 RAG 链路
+        08_easy_rag.py      字面检索 + 生成 + 引用校验
+      D4/               向量检索
+        09_build_vectors.py 编码 1,251 条法条 → articles_vec.npy
+        010_vector_rag.py   语义检索 + 生成 + 引用校验
+      D5/               Agent（LangGraph + 工具调用）
+        011_agent.py        search_law / calc_severance 两个工具 + 引用池
+      D6/               多轮与人工确认
+        012_hitl.py         SqliteSaver + interrupt 写操作确认
+      D7/               混合检索对比
+        013_hybrid_eval.py  BM25 / 向量 / RRF 三方对比
+    W2/                 第 2 周
+      D8/               测试集与评估
+        014_build_golden_set.py  40 条测试集 + --find 查法条
+        015_eval_retrieval.py    检索评估（HitRate / MRR）+ 未命中诊断
+      D9/               生成评估
+        016_ragas_eval.py    Ragas faithfulness / answer_relevancy
 explain/                开发日志
 ```
 

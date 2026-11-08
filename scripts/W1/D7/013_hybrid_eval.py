@@ -37,7 +37,10 @@ class BM25Retriever:
         "row": r,
         "tokens": toks, 
         "tf": Counter(toks)})
-    self.avgdl = sum(len(d["tokens"]) for d in self.docs) / self.N
+    total = 0
+    for d in self.docs:
+      total += len(d["tokens"])
+    self.avgdl = total / self.N
 
     # 文档频率  多少个法条包含这个词
     self.df = Counter()
@@ -58,9 +61,14 @@ class BM25Retriever:
   #检索分最高的topk条
   def retrieve(self,query,k=TOP_K):
     q=list(set(tokenize(query)))
-    scored=[(self.score(q,d),d) for d in self.docs]
+    scored=[]
+    for d in self.docs:
+      scored.append((self.score(q,d),d))
     scored.sort(key=lambda x: -x[0])
-    return [d["row"] for _, d in scored[:k]]    #只要row对象
+    result=[]
+    for _,d in scored[:k]:
+      result.append(d["row"])
+    return result    #只要row对象
 
 #向量检索器  复制010的
 class VectorRetriever:
@@ -88,7 +96,10 @@ class VectorRetriever:
     top_idx = np.argsort(-scores)[:k]
 
     # ④ 用下标取回对应的法条
-    return [self.rows[i] for i in top_idx]
+    result = []
+    for i in top_idx:
+      result.append(self.rows[i])
+    return result
 
 #混合检索器  使用RRF
 class HybridRetriever:
@@ -99,7 +110,9 @@ class HybridRetriever:
     self.pool = pool
 
     #id->row 用于融合后按id找原始记录
-    self.id_row={r["id"]:r for r in bm25.rows}
+    self.id_row = {}
+    for r in bm25.rows:
+      self.id_row[r["id"]] = r
 
   def retrieve(self,query,k=TOP_K):
     scores={} #id:score
@@ -113,7 +126,10 @@ class HybridRetriever:
       scores[r["id"]] = scores.get(r["id"], 0) + 1 / (self.k + rank + 1)
 
     top=sorted(scores.items(),key=lambda x:-x[1])[:k]#从高到低进行刨析
-    return [self.id_row[i] for i ,_ in top]
+    result = []
+    for i, _ in top:
+      result.append(self.id_row[i])
+    return result
 
 #题目 11道原有的+3道新的
 #(问题，[（法律名，条文号）,...])

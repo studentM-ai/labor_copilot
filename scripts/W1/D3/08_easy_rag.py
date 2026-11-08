@@ -71,7 +71,10 @@ class BM25Retriever:
         "row": r,
         "tokens": toks, 
         "tf": Counter(toks)})
-    self.avgdl = sum(len(d["tokens"]) for d in self.docs) / self.N
+    total = 0
+    for d in self.docs:
+      total += len(d["tokens"])
+    self.avgdl = total / self.N
 
     # 文档频率
     self.df = Counter()
@@ -92,9 +95,14 @@ class BM25Retriever:
   #检索分最高的topk条
   def retriever(self,query,k=TOP_K):
     q=list(set(tokenize(query)))
-    scored=[(self.score(q,d),d) for d in self.docs]
+    scored=[]
+    for d in self.docs:
+      scored.append((self.score(q,d),d))
     scored.sort(key=lambda x: -x[0])
-    return [d["row"] for _, d in scored[:k]]    #只要row对象
+    result=[]
+    for _,d in scored[:k]:
+      result.append(d["row"])
+    return result    #只要row对象
 
 #把检索到的法条拼成prompt,传入问题与检索到的row
 def build_message(question,hints):
