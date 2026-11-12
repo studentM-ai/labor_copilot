@@ -4,7 +4,7 @@
 
 **当前进度**：语料管道、数据体检、检索基线、最小 RAG、向量检索、
 多工具 Agent、多轮对话与人工确认、混合检索对比、40 条测试集与检索评估、
-Ragas 生成评估已完成；合同体检开发中
+Ragas 生成评估、合同体检已完成；下一步接入 FastAPI
 
 ---
 
@@ -30,7 +30,7 @@ Ragas 生成评估已完成；合同体检开发中
 - [x] 检索评估：HitRate@1/3/5 + MRR，按题型分组（向量 HitRate@5 = 0.735）
 - [x] 生成评估：Ragas faithfulness 0.919 / answer_relevancy 0.801（34 条，按题型分组）
 - [ ] 试用期上限 / 加班费计算
-- [ ] 合同体检：逐条比对法条，输出风险清单
+- [x] 合同体检：逐条比对法条输出风险清单（5 份合同 38 条，检出 12/12，误报 0/26）
 
 ---
 
@@ -349,6 +349,43 @@ faithfulness 波动约 ±0.015，单条题目的分数波动可达 ±0.1。
 
 ---
 
+### 合同体检
+
+输入一份劳动合同文本，切成条款后逐条检索法条并判断风险，输出带依据的清单。
+
+**为什么逐条处理**：整份合同塞进 prompt 会让模型抓大放小。逐条处理时每条形
+成独立的检索与判断，能溯源到具体法条。
+
+**关键设计：判断单条时把整份合同作为背景一起传入。**
+有些风险只在条款之间成立——「试用期六个月」对照《劳动法》第二十一条是合法的
+（上限就是六个月），但配上第一条的「合同期限一年」就违反《劳动合同法》第十九条
+（一年期最多两个月）。只传单条时模型只能报「法条不足」。
+
+**切分以空行为主、编号为辅**：合同天然用空行分隔条款，而编号形式（第X条 / 1. / 一、）
+可能混用。先按空行切块，块内若还有多个编号开头再细分；没有空行的合同则回退到按编号切。
+
+**测试结果**（5 份自造合同，格式各异：第X条 / 数字编号 / 中文序号 / 无编号 / 混合）：
+
+| 指标 | 结果 |
+|---|---|
+| 切分 | 5 / 5 份（8 / 9 / 6 / 5 / 10 条） |
+| 检出率 | **12 / 12** |
+| 误报率 | **0 / 26**（无正常条款被判为高风险） |
+
+埋入的违法约定包括：试用期超长、放弃社保、加班费按最低工资、无补偿竞业、
+限制生育、只签试用期合同、每周 48 小时、只缴工伤险、竞业限制三年等。
+
+**两个要说明的口径**：
+
+- 另有 2 条正常条款被判「无法判断」（工作岗位、劳动报酬），未计入误报——
+  这类条款不涉及劳动法的强制规定，检索不到相关法条
+- 这些合同是为测试人为设计的，违法点明显；**真实合同上的准确率会低于此数**
+
+> 完整报告见 [`data/eval/contract_check_result.md`](data/eval/contract_check_result.md)，
+> 量化评估见 [`data/eval/contract_eval.md`](data/eval/contract_eval.md)
+
+---
+
 ## 快速开始
 
 > **依赖提示**：`requirements.txt` 里的版本已固定并验证可用，直接安装即可。
@@ -426,6 +463,13 @@ python scripts/W2/D8/015_eval_retrieval.py       # → data/eval/retrieval_eval.
 
 # 生成质量评估（会调很多次 LLM，先跑 2 条验证）
 python scripts/W2/D9/016_ragas_eval.py          # → data/eval/ragas_eval.md
+
+# 合同体检（读 data/contracts 下的 .txt，逐条检索法条并判断风险）
+python scripts/W2/D10/017_contract_check.py      # → contract_check_result.md + raw.json
+python scripts/W2/D10/018_eval_contract.py       # → contract_eval.md
+      D10/              合同体检
+        017_contract_check.py  切分 → 逐条检索 → 判断 → 报告
+        018_eval_contract.py   与 labels.json 比对，算三个指标
 ```
 
 ---
@@ -440,6 +484,9 @@ data/
     _selected.json            ★ 最终白名单（由 04_select.py 生成）
   output/               写操作产出（AI 生成并保存的文书）
   agent_checkpoints.db  会话状态库（SQLite，checkpointer 落盘）
+  contracts/            待体检的劳动合同（.txt）
+    sample_1~5.txt        5 份，格式各异（第X条 / 1. / 一、 / 无编号 / 混合）
+    labels.json           人工标注（12 个风险点 / 26 条正常条款）
   clean/
     articles.jsonl      法条级语料，1,251 条（提交，核心资产）
     articles_vec.npy    bge-m3 向量矩阵，1251 × 1024（4.9 MB）
@@ -453,6 +500,9 @@ data/
     retrieval_eval.md         40 条测试集的 HitRate / MRR
     ragas_eval.md             Ragas 生成评估（faithfulness / answer_relevancy）
     ragas_samples.jsonl       34 条评估样本（问题 + 答案 + 检索到的法条）
+    contract_check_result.md  合同体检报告（5 份合同）
+    contract_check_raw.json   体检的结构化结果（评估脚本读取）
+    contract_eval.md          合同体检的量化评估
     golden_set.jsonl          40 条测试集（含 gold 法条 id）
   src/
     retriever.py          BM25 / 向量 / 混合三种检索器（唯一实现）

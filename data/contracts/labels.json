@@ -1,0 +1,123 @@
+{
+  "sample_1.txt": {
+    "expected_clauses": 8,
+    "risks": [
+      {
+        "index": 2,
+        "issue": "一年期合同约定试用期六个月",
+        "law": "劳动合同法第19条"
+      },
+      {
+        "index": 3,
+        "issue": "约定放弃社保",
+        "law": "社会保险法第58条"
+      },
+      {
+        "index": 4,
+        "issue": "加班费按最低工资计算",
+        "law": "劳动法第44条"
+      },
+      {
+        "index": 5,
+        "issue": "竞业限制不支付补偿",
+        "law": "劳动合同法第23条"
+      },
+      {
+        "index": 6,
+        "issue": "限制生育",
+        "law": "女职工特别规定第5条"
+      }
+    ],
+    "normal": [
+      1,
+      7,
+      8
+    ]
+  },
+  "sample_2.txt": {
+    "expected_clauses": 9,
+    "risks": [
+      {
+        "index": 6,
+        "issue": "不支付加班费",
+        "law": "劳动法第44条"
+      },
+      {
+        "index": 8,
+        "issue": "辞职扣工资作违约金",
+        "law": "劳动合同法第25条"
+      }
+    ],
+    "normal": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      7,
+      9
+    ]
+  },
+  "sample_3.txt": {
+    "expected_clauses": 6,
+    "risks": [
+      {
+        "index": 2,
+        "issue": "只签试用期合同",
+        "law": "劳动合同法第19条第4款"
+      }
+    ],
+    "normal": [
+      1,
+      3,
+      4,
+      5,
+      6
+    ]
+  },
+  "sample_4.txt": {
+    "expected_clauses": 5,
+    "risks": [
+      {
+        "index": 3,
+        "issue": "每周工作48小时超过44小时",
+        "law": "劳动法第36条"
+      },
+      {
+        "index": 5,
+        "issue": "只缴工伤保险",
+        "law": "社会保险法第58条"
+      }
+    ],
+    "normal": [
+      1,
+      2,
+      4
+    ]
+  },
+  "sample_5.txt": {
+    "expected_clauses": 10,
+    "risks": [
+      {
+        "index": 4,
+        "issue": "加班费按公司制度、基数为基本工资、三日内不提异议视为认可",
+        "law": "劳动法第44条"
+      },
+      {
+        "index": 8,
+        "issue": "竞业限制三年超过法定两年",
+        "law": "劳动合同法第24条"
+      }
+    ],
+    "normal": [
+      1,
+      2,
+      3,
+      5,
+      6,
+      7,
+      9,
+      10
+    ]
+  }
+}
