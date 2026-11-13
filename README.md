@@ -31,6 +31,7 @@ Ragas 生成评估、合同体检已完成；下一步接入 FastAPI
 - [x] 生成评估：Ragas faithfulness 0.919 / answer_relevancy 0.801（34 条，按题型分组）
 - [ ] 试用期上限 / 加班费计算
 - [x] 合同体检：逐条比对法条输出风险清单（5 份合同 38 条，检出 12/12，误报 0/26）
+- [x] 合同体检接入 Agent：三工具协作，工具选择 3/3（该调体检时调、不该调时不调）
 
 ---
 
@@ -384,6 +385,20 @@ faithfulness 波动约 ±0.015，单条题目的分数波动可达 ±0.1。
 > 完整报告见 [`data/eval/contract_check_result.md`](data/eval/contract_check_result.md)，
 > 量化评估见 [`data/eval/contract_eval.md`](data/eval/contract_eval.md)
 
+**Agent 接入**：同一套体检逻辑也接进了 Agent（`019_contract_agent.py`）。
+用户说「帮我看看 sample_1.txt 有没有问题」时，Agent 自主调用 `check_contract`，
+再补几次 `search_law` 给出法条依据；普通法律问题只调检索工具，不会误调体检。
+
+| 用户输入 | 期望工具 | 实际调用 |
+|---|---|---|
+| 帮我看看 sample_1.txt 这份合同有没有问题 | `check_contract` | ✅ 调了，另补 4 次检索 |
+| 公司不给我交社保怎么办 | `search_law` | ✅ 只调检索，未误调体检 |
+| 我想知道试用期最长能有多久 | `search_law` | ✅ 只调检索 |
+
+**一个设计考虑**：`check_contract` 收的是**文件名**而不是合同全文——
+传全文要模型一字不差转述上千字，容易漏抄且浪费 token；
+传文件名则和 `save_document(filename)` 的设计保持一致。
+
 ---
 
 ## 快速开始
@@ -467,9 +482,9 @@ python scripts/W2/D9/016_ragas_eval.py          # → data/eval/ragas_eval.md
 # 合同体检（读 data/contracts 下的 .txt，逐条检索法条并判断风险）
 python scripts/W2/D10/017_contract_check.py      # → contract_check_result.md + raw.json
 python scripts/W2/D10/018_eval_contract.py       # → contract_eval.md
-      D10/              合同体检
-        017_contract_check.py  切分 → 逐条检索 → 判断 → 报告
-        018_eval_contract.py   与 labels.json 比对，算三个指标
+
+# 合同体检的 Agent 版（用户说话，Agent 自己决定要不要体检）
+python scripts/W2/D11/019_contract_agent.py      # → contract_agent_result.md
 ```
 
 ---
@@ -503,9 +518,14 @@ data/
     contract_check_result.md  合同体检报告（5 份合同）
     contract_check_raw.json   体检的结构化结果（评估脚本读取）
     contract_eval.md          合同体检的量化评估
+    contract_agent_result.md  Agent 三组场景的调用链与答案
+    contract_agent_sample_1.md  Agent 版体检生成的报告
     golden_set.jsonl          40 条测试集（含 gold 法条 id）
   src/
-    retriever.py          BM25 / 向量 / 混合三种检索器（唯一实现）
+    retriever.py           BM25 / 向量 / 混合三种检索器（新脚本统一从这里 import）
+    citation.py            引用池 RefPool（多次检索编号不串台）
+    contract.py            合同体检核心：切分 + 逐条判断（017 与 019 共用）
+    agent.py               Agent 图：模型节点 + 工具节点 + 循环判断（工具由调用方传入）
   scripts/
     W1/                 第 1 周
       D1/               数据管道（五步）
@@ -534,6 +554,11 @@ data/
         015_eval_retrieval.py    检索评估（HitRate / MRR）+ 未命中诊断
       D9/               生成评估
         016_ragas_eval.py    Ragas faithfulness / answer_relevancy
+      D10/              合同体检
+        017_contract_check.py  切分 → 逐条检索 → 判断 → 报告
+        018_eval_contract.py   与 labels.json 比对，算三个指标
+      D11/              合同体检接入 Agent
+        019_contract_agent.py  三工具 + 三组场景测试
 explain/                开发日志
 ```
 
