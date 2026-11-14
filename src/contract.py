@@ -291,16 +291,13 @@ def judge_clause(client, clause, hits, full_text):
 def check_contract_file(filename, retriever, top_k=TOP_K, verbose=False):
   """
   体检一份合同，返回结构化结果（不写文件）
-
-  参数
-      filename:  合同文件名，如 "sample_1.txt"
-                 （内部只取文件名部分，防止传 "../../xxx" 这种路径）
-      retriever: 已建好的检索器（由调用方传进来，避免重复加载 bge-m3）
-      top_k:     每条条款检索几条法条
-      verbose:   是否打印进度（命令行版打开，Agent 版关掉）
-  返回
-      正常：{"file": 文件名, "clauses": [{index,text,risk,reason,law_refs,hit_laws}, ...]}
-      出错：{"file": 文件名, "error": "原因"}
+  
+  filename:  合同文件名，如 "sample_1.txt"(内部只取文件名部分，防止传 "../../xxx" 这种路径）
+  retriever: 已建好的检索器（由调用方传进来，避免重复加载 bge-m3）
+  top_k:     每条条款检索几条法条
+  verbose:   是否打印进度（命令行版打开，Agent 版关掉）
+  正常：{"file": 文件名, "clauses": [{index,text,risk,reason,law_refs,hit_laws}, ...]}
+  出错：{"file": 文件名, "error": "原因"}
   """
   # 只取文件名部分，防止路径穿越
   name = Path(filename).name

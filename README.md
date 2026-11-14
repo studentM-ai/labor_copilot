@@ -4,7 +4,7 @@
 
 **当前进度**：语料管道、数据体检、检索基线、最小 RAG、向量检索、
 多工具 Agent、多轮对话与人工确认、混合检索对比、40 条测试集与检索评估、
-Ragas 生成评估、合同体检已完成；下一步接入 FastAPI
+Ragas 生成评估、合同体检、性能成本测量已完成；下一步接入 FastAPI
 
 ---
 
@@ -32,6 +32,7 @@ Ragas 生成评估、合同体检已完成；下一步接入 FastAPI
 - [ ] 试用期上限 / 加班费计算
 - [x] 合同体检：逐条比对法条输出风险清单（5 份合同 38 条，检出 12/12，误报 0/26）
 - [x] 合同体检接入 Agent：三工具协作，工具选择 3/3（该调体检时调、不该调时不调）
+- [x] 性能与成本测量：冷启动约 4–9 秒（98% 在加载 bge-m3），检索仅占端到端 7–9%
 
 ---
 
@@ -401,6 +402,49 @@ faithfulness 波动约 ±0.015，单条题目的分数波动可达 ±0.1。
 
 ---
 
+### 性能与成本
+
+冷启动（只发生一次，两次实测）：
+
+| 步骤 | 耗时 | 说明 |
+|---|---|---|
+| 读 1,251 条语料 | 约 10 ms | 稳定 |
+| 建 BM25 索引 | 约 60 ms | 稳定 |
+| **加载 bge-m3 + 读向量矩阵** | **约 4–9 秒** | 取决于模型文件是否在系统磁盘缓存中 |
+| 合计 | 约 4–9 秒 | |
+
+单次检索（3 次平均）：
+
+| 检索方式 | 单次耗时 |
+|---|---|
+| BM25（纯计算，无模型） | 约 4 ms |
+| 向量（含一次 bge-m3 编码） | 约 165–205 ms |
+
+Agent 端到端（两次实测）：
+
+| 问题 | 耗时 | 工具调用 | token |
+|---|---|---|---|
+| 试用期最长能有多久 | 约 3.7–4.3 s | 2 | 约 2,400 |
+| 工作 3 年半、月薪 12000 被裁能拿多少 | 约 4.7–5.1 s | 3 | 约 3,100 |
+
+合同体检：一份 8 条的合同 **约 11–13 秒**，每条约 1.3–1.6 秒；
+按此推算 20 条约 27–32 秒。
+
+**三个观察**：
+
+- 冷启动几乎全部花在加载 bge-m3（约 2 GB）。服务常驻内存后只有第一次付这个代价；
+  时间在 4–9 秒之间波动，取决于模型文件是否还在系统磁盘缓存里
+- 向量检索比 BM25 慢约 40 倍，但慢在「把问题编码成向量」，
+  矩阵乘本身（1251 × 1024）可忽略
+- **检索只占端到端耗时的 7–9%，瓶颈在 LLM 往返**——
+  想降延迟，减少 LLM 调用次数比优化检索有效得多
+
+> token 只统计 Agent 节点自身调用（从 `usage_metadata` 累加），
+> 工具内部的模型调用未计入。
+> 数值为多次实测的典型区间：LLM 侧存在天然抖动，不追求小数点精度。
+
+---
+
 ## 快速开始
 
 > **依赖提示**：`requirements.txt` 里的版本已固定并验证可用，直接安装即可。
@@ -485,6 +529,9 @@ python scripts/W2/D10/018_eval_contract.py       # → contract_eval.md
 
 # 合同体检的 Agent 版（用户说话，Agent 自己决定要不要体检）
 python scripts/W2/D11/019_contract_agent.py      # → contract_agent_result.md
+
+# 性能与成本测量（会跑 Agent 和一次合同体检，约 1 分钟）
+python scripts/W2/D12/020_benchmark.py           # → data/eval/benchmark.md
 ```
 
 ---
@@ -520,12 +567,17 @@ data/
     contract_eval.md          合同体检的量化评估
     contract_agent_result.md  Agent 三组场景的调用链与答案
     contract_agent_sample_1.md  Agent 版体检生成的报告
+    benchmark.md              性能与成本测量（冷启动 / 检索 / 端到端 / 体检）
     golden_set.jsonl          40 条测试集（含 gold 法条 id）
   src/
     retriever.py           BM25 / 向量 / 混合三种检索器（新脚本统一从这里 import）
     citation.py            引用池 RefPool（多次检索编号不串台）
-    contract.py            合同体检核心：切分 + 逐条判断（017 与 019 共用）
-    agent.py               Agent 图：模型节点 + 工具节点 + 循环判断（工具由调用方传入）
+    contract.py            合同体检核心：切分 + 逐条判断
+    agent.py               Agent 图：模型节点 + 工具节点 + 循环判断
+    tools/                 Agent 工具集合
+      search.py              make_search_law（检索 + 进引用池）
+      calc.py                make_calc_severance（第 47 条规则代码化）
+      check.py               make_check_contract（调 contract.py，返回摘要 + 写报告）
   scripts/
     W1/                 第 1 周
       D1/               数据管道（五步）
@@ -559,7 +611,9 @@ data/
         018_eval_contract.py   与 labels.json 比对，算三个指标
       D11/              合同体检接入 Agent
         019_contract_agent.py  三工具 + 三组场景测试
-explain/                开发日志
+      D12/              性能与成本测量
+        020_benchmark.py  冷启动 / 检索 / 端到端 / 合同体检
+  explain/                开发日志
 ```
 
 ---
