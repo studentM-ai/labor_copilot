@@ -185,3 +185,10 @@ sample_3.txt（中文序号，6 条，3 隐患 测试中文序号 + 「只签试
 
 >Day12:进行性能与成本测量 主要测量单词检索，冷启动的时间，agent端到端的时间与token，以及一份合同逐条判断要多久;同时抽出一些工具到src/tools下
 把一些常用工具抽出到src/tools下，编写20代码，测速以及token量
+
+## W3：
+>Day13:合并prompts 与拼接FastAPI骨架
+将之前的prompt都合在一个文件里，并且分为3份prompt\
+schemas.py是关于数据的校验，deps是关于状态的共享\
+在main里先只弄 api/health 检查状态与api/ask 检查与非流式提问
+
