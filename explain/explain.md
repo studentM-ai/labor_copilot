@@ -192,3 +192,8 @@ sample_3.txt（中文序号，6 条，3 隐患 测试中文序号 + 「只签试
 schemas.py是关于数据的校验，deps是关于状态的共享\
 在main里先只弄 api/health 检查状态与api/ask 检查与非流式提问
 
+>Day14:SSE流式输出
+将D13main里的extract_citations / extract_tool_calls抽出到main_helpers.py里\
+修改main的代码，新增流式路由\
+使用sse是因为sse它可以让用户渐进式看到整个agent的思考过程，比如什么调用工具，开始思考这些\
+在streaming里主要处理三种事件： on_chat_model_stream  on_tool_start  on_tool_end

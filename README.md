@@ -4,7 +4,7 @@
 
 **当前进度**：语料管道、数据体检、检索基线、最小 RAG、向量检索、
 多工具 Agent、多轮对话与人工确认、混合检索对比、40 条测试集与检索评估、
-Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口已完成；下一步流式输出与前端页面
+Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口与 SSE 流式输出已完成；下一步多轮会话与前端页面
 
 ---
 
@@ -34,6 +34,7 @@ Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口已完成
 - [x] 合同体检接入 Agent：三工具协作，工具选择 3/3（该调体检时调、不该调时不调）
 - [x] 性能与成本测量：冷启动约 4–9 秒（98% 在加载 bge-m3），检索仅占端到端 7–9%
 - [x] FastAPI 接口：`/api/ask` 返回答案 + 引用法条 + 工具调用记录（含 Pydantic 校验与自动接口文档）
+- [x] SSE 流式输出：status / tool_call / tool_result / token / done / error 六类事件，心跳保长任务连接
 
 ---
 
@@ -454,11 +455,16 @@ Agent 端到端（两次实测）：
 |---|---|---|
 | GET | `/api/health` | 健康检查，不碰模型 |
 | POST | `/api/ask` | 提问，返回答案 + 引用法条 + 工具调用记录 |
+| POST | `/api/ask/stream` | 提问，SSE 流式：逐字推送 + 工具调用事件 |
 
 启动：
 
 ```bash
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+
+# 流式接口：-N 关掉 curl 自己的缓冲，才能看到实时输出
+# curl.exe -N -X POST http://127.0.0.1:8000/api/ask/stream \
+#   -H "Content-Type: application/json" --data-binary "@body.json"
 # 接口文档：http://127.0.0.1:8000/docs
 ```
 
@@ -494,6 +500,37 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 > 注意：引用编号是跨多次检索连续的（第二次检索到的新法条从 `[6]` 开始），
 > 所以答案里可能出现 `[7]` 而不只是 `[1][2]`。这是 `RefPool` 的预期行为——
 > 同一个法条始终对应同一个编号。前端展示时可重新编号为 1..n。
+
+#### 流式输出
+
+`/api/ask/stream` 用 SSE（Server-Sent Events），边跑边推，不用等 4–6 秒。
+
+| 事件 | 内容 | 前端用来做什么 |
+|---|---|---|
+| `status` | `{"stage": "thinking"}` | 显示「正在思考…」 |
+| `tool_call` | `{"name": "search_law", "args": {…}}` | 插一行「🔍 检索：社会保险 缴纳」 |
+| `tool_result` | `{"name": …, "preview": "前 100 字"}` | 折叠展示工具返回 |
+| `token` | `{"text": "试用期"}` | 追加到答案气泡 |
+| `done` | `{"answer", "citations", "tool_calls", "thread_id", "elapsed_ms"}` | 渲染引用角标、结束加载态 |
+| `error` | `{"message": …}` | 显示错误（此时 HTTP 头已发出，改不了状态码） |
+
+**三个实现要点**：
+
+- **用「生产者任务 + 队列」而不是 `wait_for(agen.__anext__())`。** 后者超时会取消
+  异步生成器的推进，状态被破坏后下次迭代抛 `RuntimeError`。用独立任务把事件塞进
+  队列，超时只影响「等队列」这一下，不影响生成器本身
+- **心跳用 SSE 注释行 `: keep-alive`。** 合同体检一份 8 条，中间有十几秒没有任何
+  事件；代理的空闲超时可能在这期间断开连接。注释行不产生事件、不显示给用户，
+  但能让链路「看到有数据流动」
+- **按 `metadata.langgraph_node == "agent"` 过滤 token。** 事件是层层冒上来的，
+  不过滤会收到重复片段（同一段文字出现两遍）
+
+> 注意：`check_contract` 内部用的是裸 `openai` SDK，不产生 LangChain 事件，
+> 所以合同体检那几十次模型调用**不会**逐条推进流里——这是预期行为。
+
+> 另：SSE 的 `data:` 行前面**不能有空格**。写成 ` data:{…}` 会让字段名变成
+> `" data"`，符合规范的解析器会整行丢弃——`curl` 看不出问题（它只打印原文），
+> 但前端会收到空内容。
 
 ---
 

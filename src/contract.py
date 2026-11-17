@@ -1,17 +1,5 @@
 """
 合同体检的核心逻辑
-
-【为什么单独抽出来】
-  命令行版（017_contract_check.py）和 Agent 版（019_contract_agent.py）都要
-  「切分 → 逐条检索 → 判断」这一套。如果两边各写一份，改 prompt 或改切分规则时
-  必然有一边忘改，导致 Agent 的实际表现和评估报告对不上。
-
-  所以这里放唯一实现，两边都 import。报告格式不在这里——那属于各自的输出，
-  命令行版输出带表格的 md，Agent 版输出摘要。
-
-【注意路径】
-  ROOT 用 __file__ 往上两层（src/ 的父目录就是项目根），
-  这样不管从哪个目录运行脚本都能找到 data/。
 """
 import json
 import os
@@ -24,12 +12,12 @@ from openai import OpenAI
 
 load_dotenv()
 
-# ---------- 路径 ----------
+#路径
 ROOT = Path(__file__).resolve().parent.parent
 CLEAN = ROOT / "data" / "clean"
 CONTRACTS = ROOT / "data" / "contracts"
 
-# ---------- 参数 ----------
+#参数
 MODEL = "deepseek-chat"
 TOP_K = 5
 MIN_PARA_LEN = 15    # 短于这个字数的段落并到相邻条款
@@ -109,16 +97,11 @@ def merge_short(parts):
 
 def split_by_number(block):
   """
-  在一个「按空行切出来的块」内部，再按行首编号细分
+  在一个【按空行切出来的块】内部，再按行首编号细分
+  只有块里出现两个以上编号行首时才切
 
-  只有块里出现【两个以上】编号行首时才切——
-  因为条款内部的列举（「甲方义务：1. … 2. …」）通常不是独立条款，
-  是同一段话的组成部分。
-
-  参数
-      block: 一个由空行切出来的块
-  返回
-      切好的段落列表；不需要切就原样返回 [block]
+  block: 一个由空行切出来的块
+  返回切好的段落列表；不需要切就原样返回 [block]
   """
   lines = block.split("\n")
 
@@ -155,23 +138,16 @@ def split_clauses(text):
   """
   分割合同成一条条条款
 
-  主策略是「按空行切」而不是「按编号切」：
-    编号形式五花八门（第X条 / 1. / 一、），还可能在同一份合同里混用；
-    但合同天然用空行分隔条款。以空行为主，就不受编号形式变化影响。
-
-  三级处理：
-    1 先按空行切成块
-    2 每块内部如果还有多个编号开头，再按编号细分（处理没留空行的情况）
-    3 切出来不到 3 条 → 说明这份合同根本没用空行，改用编号正则切全篇
-
-  参数
-      text: 合同全文
-  返回
-      条款字符串列表
+  主策略是按空行切而不是按编号切：
+  三级处理：1.先按空行切成块
+  2.每块内部如果还有多个编号开头，再按编号细分（处理没留空行的情况）
+  3.切出来不到 3 条  说明这份合同根本没用空行，改用编号正则切全篇
+  text: 合同全文
+  返回 条款字符串列表
   """
   text = text.replace("\r\n", "\n").strip()
 
-  # ---------- 1 + 2：按空行切块，块内再按编号细分 ----------
+  #按空行切块，块内再按编号细分
   blocks = re.split(r"\n\s*\n", text)
 
   parts = []
@@ -181,7 +157,7 @@ def split_clauses(text):
     for s in split_by_number(b):
       parts.append(s)
 
-  # ---------- 3：兜底 ----------
+  #3：兜底
   if len(parts) < 3:
     parts = re.split(
       r"\n(?=第[一二三四五六七八九十百零]+条|\d+[.、]|[一二三四五六七八九十]+、)",
@@ -199,11 +175,7 @@ def build_messages(clause, hits, full_text):
   hits:检索到的法条列表
   full_text:整份合同全文（作为背景）
 
-  为什么要把整份合同也传进去：
-    有些风险只在条款之间才成立。比如「试用期六个月」单独看是合法的
-    （劳动法第二十一条：试用期最长不得超过六个月），但配上第一条的
-    「合同期限一年」，就违反了劳动合同法第十九条（一年期最多两个月）。
-    只把这一条条款交给模型，它没法做这个交叉判断，只能报「法条不足」。
+  为什么要把整份合同也传进去：有些风险只在条款之间才成立
   """
   refs = []
   for i, r in enumerate(hits, 1):
@@ -228,10 +200,8 @@ def parse_verdict(raw):
   模型有时候会在 JSON 外面包一层 ```json，所以先剥掉；
   解析失败就返回 unknown，不让整个流程崩掉。
 
-  参数
-      raw: 模型的原始输出
-  返回
-      {"risk": ..., "reason": ..., "law_refs": [...]}
+  raw: 模型的原始输出
+  返回 {"risk": ..., "reason": ..., "law_refs": [...]}
   """
   text = raw.strip()
 
@@ -272,8 +242,7 @@ def judge_clause(client, clause, hits, full_text):
   clause:一条合同条款
   hits:检索到的法条
   full_text:整份合同全文
-  返回
-      parse_verdict 的结果
+  返回 parse_verdict 的结果
   """
   messages = build_messages(clause, hits, full_text)
 

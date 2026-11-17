@@ -21,7 +21,7 @@ class AskRequest(BaseModel):
     description="会话id。不传则新建一个；D15 接上 checkpointer 后用于多轮"
   )
 
-class citation(BaseModel):
+class Citation(BaseModel):
   """
   一条被答案引用到的法条
   """
@@ -42,7 +42,7 @@ class AskResponse(BaseModel):
   提问响应
   """
   answer:str =Field(...,description="答案正文，含 [1] [2] 引用标记")
-  citations:list[citation]=Field(default_factory=list,description="答案里实际引用到的法条")
+  citations:list[Citation]=Field(default_factory=list,description="答案里实际引用到的法条")
   tool_calls:list[ToolCallInfo]=Field(default_factory=list, description="这轮调用过的工具")
   thread_id: str = Field(..., description="会话 id，下次追问带上它")
   elapsed_ms: int = Field(..., description="本次耗时（毫秒）")
