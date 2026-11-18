@@ -8,10 +8,10 @@ from contextlib import asynccontextmanager    #异步上下文管理器(进入�
 from dotenv import load_dotenv
 from fastapi import FastAPI,HTTPException
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import HumanMessage,SystemMessage
+
 from . import deps
-from .schemas import AskRequest,AskResponse
-from src.prompts import QA_PROMPT
+from .schemas import AskRequest,AskResponse,SessionCreateResponse,SessionMessagesResponse,MessageItem
+
 import time,uuid
 from .main_helpers import extract_citations,extract_tool_calls
 from .streaming import sse_stream
@@ -43,25 +43,24 @@ def health():
   return {"status":"ok"}
 
 @app.post("/api/ask",response_model=AskResponse)
-def ask(req:AskRequest):
+async def ask(req:AskRequest):
   """
   提问（非流式）
   """
   rt=deps.get_runtime()
-  agent,pool=deps.make_agent(rt)
 
   thread_id=req.thread_id or uuid.uuid4().hex
   ts=time.perf_counter()
-  try:
-    result=agent.invoke(
-      {"messages":[
-        SystemMessage(content=QA_PROMPT),
-        HumanMessage(content=req.question),
-      ]},
-      config={"recursion_limit":rt.limit}
-    )
-  except Exception as e:
-    raise HTTPException(status_code=500,detail=f"Agent执行失败:{e}")
+
+  async with deps.open_agent_async(rt,thread_id) as (agent,pool,config):
+    payload=await deps.build_input_async(agent,config,req.question)
+    try:
+      result=await agent.ainvoke(
+        payload,
+        config=config
+      )
+    except Exception as e:
+      raise HTTPException(status_code=500,detail=f"Agent执行失败:{e}")
 
   elapsed_ms=int((time.perf_counter()-ts) * 1000) #本次耗时
 
@@ -94,3 +93,35 @@ async def ask_stream(req:AskRequest):
     }
 
   )
+
+@app.post("/api/sessions",response_model=SessionCreateResponse)
+def create_session():
+  """
+  新建一个会话，只发一个thread_id
+  这里只是给一个可用的id 给前端用的
+  """
+  return SessionCreateResponse(thread_id=uuid.uuid4().hex)
+
+@app.get("/api/sessions/{thread_id}/messages",response_model=SessionMessagesResponse)
+async def session_messages(thread_id:str):
+  """
+  取某个会话的历史消息，要从数据库读，所以用异步
+  """
+  rt=deps.get_runtime()
+  history=await deps.read_history(rt,thread_id)
+
+  items=[]
+  for h in history:
+    items.append(MessageItem(role=h["role"],content=h["content"]))
+  return SessionMessagesResponse(thread_id=thread_id,messages=items)
+
+@app.delete("/api/sessions/{thread_id}")
+async def delete_session(thread_id:str):
+  """
+  删除会话
+  返回deleted 表示原来有无这个会话
+  如果不存在也返回200
+  """
+  rt=deps.get_runtime()
+  existed=await deps.delete_session(rt,thread_id)
+  return {"thread_id":thread_id,"deleted":existed}

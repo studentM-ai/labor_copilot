@@ -1,7 +1,7 @@
 """
 SSE流式输出
 
-事件：
+事件（自定义）：
 status       阶段变化（thinking）
 tool_call    开始调某个工具
 tool_result  工具返回（只给前 100 字预览）
@@ -60,106 +60,108 @@ async def sse_stream(question:str,thread_id:str):
   返回SSE格式的字符串片段
   """
   rt=deps.get_runtime() #拿到共享状态
-  agent,pool=deps.make_agent(rt)
   st=time.perf_counter()
   answer_parts=[] #模型吐出 的文字，拼成完整答案
   tool_rows=[]  #工具调用记录
 
-  yield sse("status",{"stage":"thinking"})  #表示正在干活正在思考中
+  async with deps.open_agent_async(rt,thread_id) as (agent,pool,config):
+    #续聊只传human
+    payload=await deps.build_input_async(agent,config,question)
+  
+    yield sse("status",{"stage":"thinking"})  #表示正在干活正在思考中
 
-  #用队列桥接【异步事件流】和【心跳】 不用wait_for是因为超时会引发错误
-  queue:asyncio.Queue=asyncio.Queue()
-  error_box={"err":None}  #存放异常信息
+    #用队列桥接【异步事件流】和【心跳】 不用wait_for是因为超时会引发错误
+    queue:asyncio.Queue=asyncio.Queue()
+    error_box={"err":None}  #存放异常信息
 
-  async def producer():
-    """
-    把agent的事件放进队列，结束时放None标记
-    """
-    try:
-      payload={
-        "messages":[
-          SystemMessage(content=QA_PROMPT),
-          HumanMessage(content=question)
-        ]
-      }
-      config={"recursion_limit":rt.limit}
-      #ev是事件对象，是字典形状的
-      async for ev in agent.astream_events(payload,config=config,version="v2"):
-        await queue.put(ev)
-    except Exception as e:
-      error_box["err"]=e
-    finally:
-      await queue.put(None)
-
-  task=asyncio.create_task(producer())  #启动，开始跑Agent，事件不断入队
-  try:
-    while True:
+    async def producer():
+      """
+      把agent的事件放进队列，结束时放None标记
+      """
       try:
-        #等下一个事件，最多SECONDS秒
-        ev=await asyncio.wait_for(queue.get(),timeout=SECONDS)
-      except asyncio.TimeoutError:  #超时没有新事件的时候就发一条心跳防止断开连接
-        yield heartbeat()
-        continue
+        #ev是事件对象，是字典形状的
+        async for ev in agent.astream_events(payload,config=config,version="v2"):
+          await queue.put(ev) #把每个事件都放进去队列
+      except Exception as e:
+        error_box["err"]=e
+      finally:
+        await queue.put(None)
 
-      if ev is None:
-        break
+    task=asyncio.create_task(producer())  #启动，开始跑Agent，事件不断入队
+    try:
+      while True:
+        try:
+          #等下一个事件，最多SECONDS秒
+          ev=await asyncio.wait_for(queue.get(),timeout=SECONDS)
+        except asyncio.TimeoutError:  #超时没有新事件的时候就发一条心跳防止断开连接
+          yield heartbeat()
+          continue
 
-      #处理需要的三类事件
-      kind=ev.get("event")
-      metadata=ev.get("metadata") or {}
-      #按langgraph_node 过滤，因为astream会把每次嵌套调用都报上来，可能会收到重复的token
-      node=metadata.get("langgraph_node")
+        if ev is None:
+          break
 
-      if kind=="on_chat_model_stream":  #如果是模型吐出字段事件
-        if node=="agent":
-          chunk=ev.get("data",{}).get("chunk")
-          text=getattr(chunk,"content","") or ""  #拿到内容
-          if text:
-            answer_parts.append(text)
-            yield sse("token",{"text":text})
+        #处理需要的三类事件
+        kind=ev.get("event")
+        metadata=ev.get("metadata") or {}
+        #按langgraph_node 过滤，因为astream会把每次嵌套调用都报上来，可能会收到重复的token
+        node=metadata.get("langgraph_node")
 
-      elif kind=="on_tool_start": #工具开始事件
-        name=ev.get("name","")
-        args=(ev.get("data")or {}).get("input") or {}
-        #只保留字符串/数字这类可json化的值
-        safe_args={}
-        for k ,v in args.items():
-          if isinstance(v,(str,int,float,bool))or v is None:
-            safe_args[k]=v
-        tool_rows.append({"name":name,"args":safe_args})
-        yield sse("tool_call",{"name":name,"args":safe_args})
+        if kind=="on_chat_model_stream":  #如果是模型吐出字段事件
+          if node=="agent":
+            chunk=ev.get("data",{}).get("chunk")
+            text=getattr(chunk,"content","") or ""  #拿到内容
+            if text:
+              answer_parts.append(text)
+              yield sse("token",{"text":text})
 
-      elif kind=="on_tool_end": #工具结束事件
-        name=ev.get("name","")
-        out=(ev.get("data")or{}).get("output")
-        #输出可能是字符串也可能是对象
-        preview=""
-        if isinstance(out,str):
-          preview=out[:100]
-        else:
-          preview=str(out)[:100]
-        yield sse("tool_result",{"name":name,"preview":preview})
+        elif kind=="on_tool_start": #工具开始事件
+          name=ev.get("name","")
+          args=(ev.get("data")or {}).get("input") or {}
+          #只保留字符串/数字这类可json化的值
+          safe_args={}
+          for k ,v in args.items():
+            if isinstance(v,(str,int,float,bool))or v is None:
+              safe_args[k]=v
+          tool_rows.append({"name":name,"args":safe_args})
+          yield sse("tool_call",{"name":name,"args":safe_args})
 
-    #出错
-    if error_box["err"] is not None:
-      yield sse("error",{"message":f"Agent执行失败：{error_box['err']}"})
-      return
+        elif kind=="on_tool_end": #工具结束事件
+          name=ev.get("name","")
+          out=(ev.get("data")or{}).get("output")
+          #输出可能是字符串也可能是对象
+          preview=""
+          if isinstance(out,str):
+            preview=out[:100]
+          else:
+            preview=str(out)[:100]
+          yield sse("tool_result",{"name":name,"preview":preview})
 
-    #正常结束
-    answer="".join(answer_parts)
-    elapsed_ms=int((time.perf_counter()-st)*1000)
-    citations=extract_citations(answer,pool)
-    yield sse("done",{
-      "answer":answer,
-      "citations":[c.model_dump() for c in citations],   #转普通dict
-      "tool_calls":tool_rows,
-      "thread_id":thread_id,
-      "elapsed_ms":elapsed_ms,
-    })
-  finally:
-    #客户端断开时，生成器会被关闭，这里要取消生产者任务 否则白花token
-    if not task.done():
-      task.cancel()
+    finally:
+      #客户端断开时，生成器会被关闭，这里要取消生产者任务 否则白花token
+      if not task.done():
+        task.cancel()
+        try:
+          await task
+        except asyncio.CancelledError:
+          pass
+        except Exception:
+          pass
+
+  #出了 async with 连接关闭，这里用内存里的数据
+  if error_box["err"] is not None:
+    yield sse("error",{"message":f"Agent执行失败：{error_box['err']}"})
+    return
+
+  answer="".join(answer_parts)
+  elapsed_ms=int((time.perf_counter()-st)*1000)
+  citations=extract_citations(answer,pool)
+  yield sse("done",{
+    "answer":answer,
+    "citations":[c.model_dump() for c in citations],   #转普通dict
+    "tool_calls":tool_rows,
+    "thread_id":thread_id,
+    "elapsed_ms":elapsed_ms,
+  })
 
 
       

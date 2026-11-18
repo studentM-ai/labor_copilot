@@ -197,3 +197,10 @@ schemas.py是关于数据的校验，deps是关于状态的共享\
 修改main的代码，新增流式路由\
 使用sse是因为sse它可以让用户渐进式看到整个agent的思考过程，比如什么调用工具，开始思考这些\
 在streaming里主要处理三种事件： on_chat_model_stream  on_tool_start  on_tool_end
+
+>Day15:多轮对话+状态持久化
+修改src/agent.py 加上checkpointer参数；\
+修改app/deps.py 按thread复用的引用池+异步持久化（checkpointer：保存单条 thread 的运行状态快照，用于做存档，断点续跑，相当于存档器）,删除make_agent
+在schemas.py 加三个校验模型：会话，一条历史消息，某个会话的历史消息\
+修改main.py为异步版本，新增三个会话接口\
+修改streaming.py  外围从[每请求新建 agent]变成[async with 打开带 checkpointer 的 agent]\

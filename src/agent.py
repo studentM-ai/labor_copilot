@@ -6,7 +6,7 @@ from langchain_core.tools import tool
 from langgraph.graph import END,START,StateGraph,MessagesState
 from langgraph.prebuilt import ToolNode
 
-def build_graph(tools,api_key,model="deepseek-chat", max_tokens=1200):
+def build_graph(tools,api_key,model="deepseek-chat", max_tokens=1200,checkpointer=None):
   """
   给定工具列表，返回编译好的Agent图
   """
@@ -43,6 +43,6 @@ def build_graph(tools,api_key,model="deepseek-chat", max_tokens=1200):
   g.add_edge(START,"agent")
   g.add_conditional_edges("agent",should_continue,["tools",END])
   g.add_edge("tools","agent")
-  return g.compile()   
+  return g.compile(checkpointer=checkpointer)   
 
 

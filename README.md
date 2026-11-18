@@ -4,7 +4,7 @@
 
 **当前进度**：语料管道、数据体检、检索基线、最小 RAG、向量检索、
 多工具 Agent、多轮对话与人工确认、混合检索对比、40 条测试集与检索评估、
-Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口与 SSE 流式输出已完成；下一步多轮会话与前端页面
+Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE 流式输出、多轮会话与持久化已完成；下一步前端页面
 
 ---
 
@@ -35,6 +35,7 @@ Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口与 SSE �
 - [x] 性能与成本测量：冷启动约 4–9 秒（98% 在加载 bge-m3），检索仅占端到端 7–9%
 - [x] FastAPI 接口：`/api/ask` 返回答案 + 引用法条 + 工具调用记录（含 Pydantic 校验与自动接口文档）
 - [x] SSE 流式输出：status / tool_call / tool_result / token / done / error 六类事件，心跳保长任务连接
+- [x] 多轮会话与持久化：AsyncSqliteSaver 按 thread_id 存档，引用编号跨轮连续，支持新建/查历史/删除会话
 
 ---
 
@@ -456,8 +457,18 @@ Agent 端到端（两次实测）：
 | GET | `/api/health` | 健康检查，不碰模型 |
 | POST | `/api/ask` | 提问，返回答案 + 引用法条 + 工具调用记录 |
 | POST | `/api/ask/stream` | 提问，SSE 流式：逐字推送 + 工具调用事件 |
+| POST | `/api/sessions` | 新分配一个 thread_id（不写数据库，给前端「新建对话」用） |
+| GET | `/api/sessions/{thread_id}/messages` | 取某个会话的历史消息 |
+| DELETE | `/api/sessions/{thread_id}` | 删除会话（幂等，不存在也返回 200） |
 
 启动：
+
+**依赖提示**：多轮会话用到 `AsyncSqliteSaver`，它依赖 `aiosqlite` 和
+`langgraph-checkpoint-sqlite`。装完 `requirements.txt` 后先确认一下：
+
+```bash
+python -c "from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver; import aiosqlite; print('OK')"
+```
 
 ```bash
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
@@ -487,13 +498,13 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 **三个设计点**：
 
-- **检索器共享、Agent 图每请求新建。** bge-m3 要 4–9 秒加载，必须单例；
-  但图里的工具捕获了引用池 `RefPool`，共享一个图会让不同请求的编号互相污染
-  （甲看到 `[1]`，乙的检索结果也占用了 `[1]`）。所以检索器共享、图和池每请求新建，
-  建图本身不加载模型，很便宜
-- **路由用 `def` 而不是 `async def`。** `agent.invoke` 是同步阻塞的，一次 3–5 秒；
-  写成 `async def` 会占住事件循环，期间其他请求全被卡住。用 `def` 时 FastAPI
-  会自动放进线程池
+- **三种资源三种寿命。** 检索器（bge-m3，加载 4–9 秒）进程级单例；引用池 `RefPool`
+  按会话复用——同一会话的引用编号必须连续，否则第二轮会引用错法条；Agent 图每请求新建
+  ——图里的工具闭包捕获了引用池，共享一个图会让不同会话的编号互相污染
+- **`/api/ask` 用 `async def`。** 因为接了异步 checkpointer（`AsyncSqliteSaver`），
+  同步的 `SqliteSaver` 不支持异步图（会抛 `NotImplementedError`），所以必须 `await agent.ainvoke(...)`。
+  `ainvoke` 会把图里的同步节点丢到线程池执行，不会阻塞事件循环。
+  纯内存的 `/api/health` 和 `/api/sessions` 仍是同步 `def`
 - **`citations` 只返回答案里真正引用到的法条。** 一次问答可能检索到 10 条，
   答案只用了 3 条；全返回会让前端多出一堆没人用的依据
 
@@ -531,6 +542,43 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 > 另：SSE 的 `data:` 行前面**不能有空格**。写成 ` data:{…}` 会让字段名变成
 > `" data"`，符合规范的解析器会整行丢弃——`curl` 看不出问题（它只打印原文），
 > 但前端会收到空内容。
+
+#### 多轮会话
+
+Agent 图本身没有记忆，每次调用都是从头开始。多轮靠 **checkpointer**：
+每次跑完自动把完整消息历史按 `thread_id` 存进 SQLite，下次用同一个 id 调用时读回来。
+
+```json
+// 第一次：不传 thread_id，服务端新建一个并在响应里返回
+{"question": "我工作3年半，月薪12000，被裁员了能拿多少经济补偿"}
+
+// 第二次：带上同一个 thread_id，这次故意不提年限
+{"question": "那如果公司是违法解除呢", "thread_id": "fcce25c5761f4c83acdb4bc6d4c2d95f"}
+```
+
+**实测第二轮的回答：**
+
+> 经济补偿 N = 48000 元（4 个月 × 12000）
+> 违法解除赔偿金 2N = 96000 元
+
+**它没有重新问工作年限——第一轮算出的 48000 被带进了第二轮。**
+
+**三个实现要点**：
+
+- **引用池必须按 `thread_id` 复用，不能每轮新建。** 反例：第 1 轮检索到 5 条，
+  答案写 `[2]`，历史里于是存着「`[2]` = 第十九条」。第 2 轮若新建池，新法条又从 `[1]` 开始，
+  模型再写 `[2]` 就会被映射成第 2 轮的某条法条——**编号没错，法条错了**。
+  所以 `_pools` 是个 `thread_id → RefPool` 的字典
+- **续聊只传 `HumanMessage`，首轮才传 `SystemMessage`。** 历史由 checkpointer 恢复；
+  每轮都传 system 消息的话，聊十轮会攒十条重复的 system，白烧 token 还可能干扰模型。
+  判断依据是 `aget_state` 里有没有历史
+- **每个请求开一个数据库连接，用完关掉。** 用 `async with AsyncSqliteSaver.from_conn_string(...)`
+  包住整个请求；aiosqlite 的连接绑定事件循环，跨请求共享会互相干扰
+
+**已知局限**（都在演示范围外）：
+
+- `_pools` 在内存里，服务重启后老会话的引用编号会与新一轮错位——重启后建议新开会话
+- 历史无限增长，聊得越久 input token 越大，暂未做截断
 
 ---
 
@@ -631,9 +679,11 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 ```
 app/                    Web 层（FastAPI）
-  main.py                 路由：/api/health、/api/ask
+  main.py                 6 个路由：health / ask / ask-stream / 会话三件套
   schemas.py              Pydantic 请求/响应模型（自动校验 + 生成接口文档）
-  deps.py                 共享检索器单例；每次请求新建 agent 与引用池
+  deps.py                 检索器单例 + 按会话复用引用池 + 异步 checkpointer 连接
+  streaming.py            SSE 流式生成器（生产者队列 + 心跳 + 事件过滤）
+  main_helpers.py         引用提取（两个接口共用，避免循环 import）
 data/
   raw/                  上游原始语料（约 33 MB，不提交；重建方式见上）
     _index.json               全量索引

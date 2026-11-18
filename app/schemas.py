@@ -46,3 +46,23 @@ class AskResponse(BaseModel):
   tool_calls:list[ToolCallInfo]=Field(default_factory=list, description="这轮调用过的工具")
   thread_id: str = Field(..., description="会话 id，下次追问带上它")
   elapsed_ms: int = Field(..., description="本次耗时（毫秒）")
+
+class SessionCreateResponse(BaseModel):
+  """
+  新建会话的返回
+  """
+  thread_id:str=Field(...,description="新会话id，之后提问带上它")
+
+class MessageItem(BaseModel):
+  """
+  一条历史消息
+  """
+  role:str=Field(...,description="human/ai/tool/system")
+  content:str=Field(...,description="消息内容（工具截断到200字）")
+
+class SessionMessagesResponse(BaseModel):
+  """
+  某个会话的历史消息
+  """
+  thread_id:str
+  messages:list[MessageItem]=Field(default_factory=list)
