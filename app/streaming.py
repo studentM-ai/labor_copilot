@@ -27,11 +27,10 @@ error        出错（此时 HTTP 状态码已经发出去了，改不了，只�
 }
 """
 import asyncio,json,time
-from langchain_core.messages import HumanMessage,SystemMessage
 
 from . import deps
 from .main_helpers import extract_citations
-from src.prompts import QA_PROMPT
+
 
 #时间间隔（心跳间隔），用于合同体验中间保持连接
 SECONDS=5 

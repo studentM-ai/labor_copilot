@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>职场权益 Copilot</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="layout">
+
+  <!-- 左侧会话列表 -->
+  <aside class="sidebar">
+    <div class="brand">职场权益 Copilot</div>
+    <button id="new-session" class="new-btn">＋ 新建对话</button>
+    <div id="sessions" class="sessions"></div>
+    <div class="tip">劳动法问答 · 合同体检<br>回答不构成法律意见</div>
+  </aside>
+
+  <!-- 右侧对话区 -->
+  <main class="main">
+    <div id="chat" class="chat">
+      <div class="empty" id="empty">
+        <h1>说人话，找法条</h1>
+        <p>用大白话描述你遇到的事，比如：</p>
+        <ul>
+          <li>公司不给我交社保怎么办</li>
+          <li>我工作 3 年半，月薪 12000，被裁了能拿多少</li>
+        </ul>
+
+        <!-- 示例合同：由 /api/contracts 动态填充，避免用户不知道文件名 -->
+        <div class="examples-wrap">
+          <p class="examples-title">或者直接体检一份合同：</p>
+          <div id="examples" class="examples"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 附件条：选好合同后出现在输入框上方 -->
+    <div id="attach-bar" class="attach-bar" hidden>
+      <span class="attach-icon">📄</span>
+      <span id="attach-name" class="attach-name"></span>
+      <button id="attach-check" class="attach-check">开始体检</button>
+      <span class="attach-hint">或直接在下面提问</span>
+      <button id="attach-remove" class="attach-remove" title="取消">×</button>
+    </div>
+
+    <div class="composer">
+      <button id="upload-btn" class="icon-btn" title="上传合同（.txt）">📎</button>
+      <input type="file" id="file-input" accept=".txt" hidden>
+      <textarea id="input" rows="1" placeholder="描述你的情况…… （Enter 发送，Shift+Enter 换行）"></textarea>
+      <button id="send">发送</button>
+    </div>
+  </main>
+
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

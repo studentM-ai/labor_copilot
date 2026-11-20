@@ -69,6 +69,40 @@ def list_contracts():
   return names
 
 
+
+
+def decode_bytes_smart(raw):
+  """
+  把字节解成文本，自动判断编码
+
+  直接用 read_text(encoding='utf-8')，遇到 GBK 文件会抛 UnicodeDecodeError。
+  而 Windows 记事本默认存成 GBK，用户上传的中文合同大概率是 GBK 这是上传功能必须处理的问题。
+  raw: bytes
+  返回: 字符串；三种编码都解不出来时返回 None（交给调用方决定怎么办）
+  """
+  for enc in ("utf-8-sig", "utf-8", "gbk"):
+    try:
+      return raw.decode(enc)
+    except UnicodeDecodeError:
+      continue
+  return None
+
+
+def read_text_smart(path):
+  """
+  读文本文件，自动判断编码
+
+  实在解不出来（比如二进制文件被改名成 .txt）时用替换字符兜底，
+  保证不抛异常  让后面的流程自己产生「切分不出来」的结果，
+  而不是在这里直接崩。
+  """
+  raw = path.read_bytes()
+  text = decode_bytes_smart(raw)
+  if text is None:
+    return raw.decode("utf-8", errors="replace")  #强制容错编码
+  return text
+
+
 def merge_short(parts):
   """
   把过短的段落并到上一条，去掉空段落
@@ -257,7 +291,7 @@ def judge_clause(client, clause, hits, full_text):
   return parse_verdict(raw)
 
 
-def check_contract_file(filename, retriever, top_k=TOP_K, verbose=False):
+def check_contract_file(filename, retriever, top_k=TOP_K, verbose=False, on_progress=None):
   """
   体检一份合同，返回结构化结果（不写文件）
   
@@ -265,6 +299,8 @@ def check_contract_file(filename, retriever, top_k=TOP_K, verbose=False):
   retriever: 已建好的检索器（由调用方传进来，避免重复加载 bge-m3）
   top_k:     每条条款检索几条法条
   verbose:   是否打印进度（命令行版打开，Agent 版关掉）
+  on_progress: 可选回调，每判完一条调用一次，签名 on_progress(已完成条数, 总条数, 条款原文, 风险值)
+               给 SSE 接口推实时进度用；017/019 不传就是 None，行为不变
   正常：{"file": 文件名, "clauses": [{index,text,risk,reason,law_refs,hit_laws}, ...]}
   出错：{"file": 文件名, "error": "原因"}
   """
@@ -284,7 +320,8 @@ def check_contract_file(filename, retriever, top_k=TOP_K, verbose=False):
 
   client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 
-  text = path.read_text(encoding="utf-8")
+  # 自动判断编码（GBK 的合同也能读）
+  text = read_text_smart(path)
   clauses = split_clauses(text)
 
   if verbose:
@@ -312,6 +349,11 @@ def check_contract_file(filename, retriever, top_k=TOP_K, verbose=False):
       "hit_laws": hit_laws,
     })
 
+    # 通知调用方「又判完一条」（SSE 接口靠它推进度条）
+    # 注意放在 verdict 算出来之后，否则拿不到风险值
+    if on_progress is not None:
+      on_progress(i, len(clauses), clause, verdict["risk"])
+
     if verbose:
       # 条款原文可能有换行，打印时压成一行
       one_line = clause[:30].replace("\n", " ")
@@ -319,5 +361,14 @@ def check_contract_file(filename, retriever, top_k=TOP_K, verbose=False):
 
     # 轻微限速，避免连续调用被判定为高频
     time.sleep(0.3)
+
+  # 切出来的条款太少，大概率上传的不是合同（或者格式太怪）
+  # 不直接报错，只带个 warning 给前端提示 用户可能就是想试一个只有两三段的文件
+  if len(clauses) < 3:
+    return {
+      "file": name,
+      "clauses": results,
+      "warning": f"只切出 {len(clauses)} 条条款，可能不是标准合同格式，结果仅供参考",
+    }
 
   return {"file": name, "clauses": results}

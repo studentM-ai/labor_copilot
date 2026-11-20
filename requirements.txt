@@ -21,6 +21,7 @@ langchain-community==0.3.30
 fastapi==0.162.7
 uvicorn==0.54.0
 aiosqlite==0.22.1        # AsyncSqliteSaver 依赖，多轮会话用
+python-multipart==0.0.34  # 文件上传（UploadFile）必需
 
 # ---- env ----
 python-dotenv==1.2.4

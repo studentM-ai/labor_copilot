@@ -1,7 +1,7 @@
 """
 共享检索器，每次请求新建agent（图+引用池新建）
 按 thread 复用的引用池 + 异步持久化
-
+主要是状态共享
 每个请求开一个数据库连接
 """
 
@@ -10,6 +10,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from langchain_core.messages import HumanMessage,SystemMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver  #异步本地文件持久化
+from types import SimpleNamespace
+import re
+
+from .main_helpers import extract_citations
 
 from src.agent import build_graph
 from src.citation import RefPool
@@ -133,21 +137,80 @@ async def build_input_async(agent,config,question:str)->dict:
 async def read_history(rt:Runtime,thread_id:str)->list[dict]:
   """
   读某个会话的历史消息（给 /api/sessions/{tid}/messages 用）
-  返回[{"role": "human"/"ai"/"tool"/"system", "content": "..."}, ...]
+
+  返回[{"role":..., "content":..., "citations":[...]}, ...]
+
+  工具消息里本来就存着检索结果的原文，格式是：
+    [3] 《中华人民共和国劳动合同法》第十九条
+    劳动合同期限三个月以上不满一年的……
+  把这些条目抠出来，就得到「编号 -> 法条」，和当初 RefPool 里的内容一致。
+  然后复用 extract_citations，按答案里实际出现的 [n] 挑出来。
   """
   async with open_agent_async(rt,thread_id) as (agent,_pool,config):
-    state=await agent.aget_state(config)  #拿状态
-    history=(state.values or {}).get("messages")or []   #拿到历史消息
+    state=await agent.aget_state(config)
+    history=(state.values or {}).get("messages")or []
+
+  pool_like=restore_pool_from_history(history)
 
   out=[]
   for m in history:
-    content=m.content if isinstance(m.content ,str)else str(m.content)  #转字符串
-    #工具返回可能很长，截断
-    if m.type=="tool":
-      content=content[:200]
+    text=m.content if isinstance(m.content,str)else str(m.content)
 
-    out.append({"role":m.type,"content":content})
+    #工具消息：内容和法条原文重复，截断显示就行
+    if m.type=="tool":
+      out.append({"role":"tool","content":text[:200],"citations":[]})
+      continue
+
+    citations=[]
+    if m.type=="ai" and text.strip() and pool_like is not None:
+      for c in extract_citations(text,pool_like):
+        citations.append(c.model_dump())
+
+    out.append({"role":m.type,"content":text,"citations":citations})
   return out
+
+
+def restore_pool_from_history(history):
+  """
+  从历史里的工具消息还原[编号 -> 法条]，做成一个「长得像 RefPool」的对象
+
+  返回 SimpleNamespace 而不是 RefPool：extract_citations 只用到 pool.items 这一个属性。
+  造一个只有 items 的对象就够了，不引入真实池会干净一点。
+
+  返回 None 表示历史里一个法条都没有（纯计算类对话），调用方跳过即可。
+  """
+  #把所有tool消息的内容收集
+  found={}
+  for m in history:
+    if m.type!="tool":
+      continue
+    text=m.content if isinstance(m.content,str)else str(m.content)
+
+    #工具里多个条目用空行分隔
+    for chunk in text.split("\n\n"):
+      #五组匹配
+      match=re.match(r"^\[(\d+)\] 《([^》]+)》([^\n]+)\n([\s\S]*)$",chunk.strip())
+      if not match:
+        continue
+      idx=int(match.group(1)) #取第一组
+      #同一个编号可能在不同轮被多次检索到，保留第一次的即可
+      if idx in found:
+        continue
+      found[idx]={
+        "law_title":match.group(2),
+        "display_no":match.group(3).strip(),
+        "text":match.group(4).strip(),
+      }
+
+  if len(found)==0:
+    return None
+
+  #编号是 1 起的，中间可能有空洞（比如历史被截断），补占位保持下标对齐
+  items=[]
+  for i in range(1,max(found.keys())+1):
+    items.append(found.get(i,{"law_title":"","display_no":"","text":""}))
+
+  return SimpleNamespace(items=items)
 
 
 async def delete_session(rt:Runtime,thread_id:str)->bool:

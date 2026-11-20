@@ -43,4 +43,8 @@ Thumbs.db
 .idea/
 .vscode/settings.json
 tempCodeRunnerFile.py
-data/output/claim.md
+data/output/
+
+# ========== 运行时生成的报告（重跑就有，不提交）==========
+data/eval/contract_report_*.md
+data/eval/contract_agent_sample_*.md

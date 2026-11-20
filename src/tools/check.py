@@ -82,13 +82,10 @@ def make_check_contract(retriever, top_k=TOP_K):
       if c["risk"] in ("high","medium"):
         risky.append(c)
 
-    #只把最严重的3条摘要给模型，避免返回值太长挤占上下文
-    risky.sort(key=lambda c:0 if c["risk"]=="high" else 1)  #把high的放前面
-    top3=[]
-    for c in risky[:3]:
-      top3.append(f"第{c['index']}条（{c['risk']}）：{c['reason'][:50]}")
+    #按风险等级排序，high 在前
+    risky.sort(key=lambda c:0 if c["risk"]=="high" else 1)
 
-    #完整报告写进文件
+    #完整报告写进文件（存档用，不是给用户去打开的）
     out_path=EVAL/ f"contract_agent_{Path(result['file']).stem}.md"
     EVAL.mkdir(parents=True,exist_ok=True)
     with open(out_path,"w",encoding="utf-8")as f:
@@ -101,17 +98,28 @@ def make_check_contract(retriever, top_k=TOP_K):
         high_n+=1
     medium_n=len(risky)-high_n
 
+    MAX_LIST=10 #最大条数
+    listed=risky[:MAX_LIST]
+
+    detail=[]
+    for c in listed:
+      detail.append(f"第{c['index']}条（{c['risk']}）：{c['reason']}")
+
     summary=(
       f"合同 {result['file']} 体检完成：共 {len(clauses)} 条条款，"
       f"检出 {len(risky)} 条有风险的条款"
       f"（高风险 {high_n} 条，中风险 {medium_n} 条）。\n"
     )
 
-    if len(top3)>0:
-      summary+=f"下面只列出最严重的 {len(top3)} 条（不是全部）：\n"
-      summary+="\n".join(top3)+"\n"
+    if len(detail)>0:
+      summary+="有风险的条款如下：\n"
+      summary+="\n".join(detail)+"\n"
 
-    summary+=f"完整报告已写入 {out_path.name}"
+    #还有没列出来的（合同特别长时）
+    if len(risky)>len(listed):
+      summary+=f"另有 {len(risky)-len(listed)} 条风险未列出（合同太长，已截断）。\n"
+
+    summary+="以上是全部结论，请直接讲给用户，不要让用户去查看任何文件。"
 
     return summary
 

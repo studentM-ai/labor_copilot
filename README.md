@@ -4,7 +4,7 @@
 
 **当前进度**：语料管道、数据体检、检索基线、最小 RAG、向量检索、
 多工具 Agent、多轮对话与人工确认、混合检索对比、40 条测试集与检索评估、
-Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE 流式输出、多轮会话与持久化已完成；下一步前端页面
+Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE 流式输出、多轮会话与持久化、前端页面、合同接口与文件上传已完成
 
 ---
 
@@ -36,6 +36,9 @@ Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE �
 - [x] FastAPI 接口：`/api/ask` 返回答案 + 引用法条 + 工具调用记录（含 Pydantic 校验与自动接口文档）
 - [x] SSE 流式输出：status / tool_call / tool_result / token / done / error 六类事件，心跳保长任务连接
 - [x] 多轮会话与持久化：AsyncSqliteSaver 按 thread_id 存档，引用编号跨轮连续，支持新建/查历史/删除会话
+- [x] 前端单页：SSE 逐字渲染、markdown（含表格）、引用角标可点并重编号、多会话侧边栏
+- [x] 合同接口：列表 / 上传（四道防护 + GBK 兜底 + 内容去重）/ 体检 SSE 逐条推进度
+- [x] 工具返回值修正：全量列出风险条款（上限 10 条），不再让用户去看服务器上的文件
 
 ---
 
@@ -460,6 +463,9 @@ Agent 端到端（两次实测）：
 | POST | `/api/sessions` | 新分配一个 thread_id（不写数据库，给前端「新建对话」用） |
 | GET | `/api/sessions/{thread_id}/messages` | 取某个会话的历史消息 |
 | DELETE | `/api/sessions/{thread_id}` | 删除会话（幂等，不存在也返回 200） |
+| GET | `/api/contracts` | 列出 `data/contracts` 下可体检的合同 |
+| POST | `/api/contracts/upload` | 上传合同（.txt，≤512 KB），内容相同则复用 |
+| POST | `/api/contracts/check/stream` | 体检合同，SSE 逐条推进度 |
 
 启动：
 
@@ -477,6 +483,7 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 # curl.exe -N -X POST http://127.0.0.1:8000/api/ask/stream \
 #   -H "Content-Type: application/json" --data-binary "@body.json"
 # 接口文档：http://127.0.0.1:8000/docs
+# 前端页面：http://127.0.0.1:8000/    （浏览器打开就是聊天界面）
 ```
 
 **请求与响应**：
@@ -579,6 +586,100 @@ Agent 图本身没有记忆，每次调用都是从头开始。多轮靠 **check
 
 - `_pools` 在内存里，服务重启后老会话的引用编号会与新一轮错位——重启后建议新开会话
 - 历史无限增长，聊得越久 input token 越大，暂未做截断
+#### 合同体检接口
+
+`/api/contracts/check/stream` 和聊天的流式是**两套事件**——前者推「进度」，后者推「token」：
+
+| 事件 | 内容 | 前端用来做什么 |
+|---|---|---|
+| `status` | `{"stage": "thinking", "file": "sample_1.txt"}` | 显示「正在读取合同…」 |
+| `progress` | `{"done": 3, "total": 8, "clause": "第三条 社会保险…", "risk": "high"}` | 更新「正在检查第 3/8 条」 |
+| `done` | `{"file", "total", "high", "medium", "none", "unknown", "report", "report_path", "elapsed_ms"}` | 渲染报告 |
+| `error` | `{"message": …}` | 显示错误 |
+
+**实测**（`sample_1.txt`，8 条，13.5 秒）：
+
+```
+1/8  none     第一条 合同期限…
+2/8  high     第二条 试用期 双方约定试用期为六个月…
+3/8  high     第三条 社会保险 乙方自愿放弃社会保险…
+4/8  high     第四条 工作时间与加班…
+5/8  high     第五条 竞业限制…
+6/8  high     第六条 婚育约定…
+7/8  none     第七条 工资发放…
+8/8  unknown  第八条 工作地点…
+```
+
+**三个实现要点**：
+
+- **体检必须丢到线程里跑。** `check_contract_file` 是同步的（同步 openai 客户端），
+  一份 8 条的合同要 11–13 秒；直接在 `async` 函数里调用会把事件循环占死，
+  期间连 `/api/health` 都不响应。所以用 `asyncio.to_thread`
+- **跨线程推进度要用 `loop.call_soon_threadsafe`。** `on_progress` 在工作线程里被调用，
+  而 `asyncio.Queue` 只在事件循环线程里安全，不能直接 `put_nowait`
+- **上传必须做编码兜底。** Windows 记事本存的 txt **默认是 GBK**，
+  直接 `read_text(encoding="utf-8")` 会抛 `UnicodeDecodeError`。
+  所以先试 `utf-8-sig`（吃掉 BOM）、再 `utf-8`、再 `gbk`
+
+**上传的四道防护**：
+
+| 防护 | 做法 |
+|---|---|
+| 路径穿越 | 只取文件名部分，反斜杠也切掉（`../../evil.txt` → `evil.txt`） |
+| 超大文件 | 分块读、边读边累加，超 512 KB 立刻拒绝 |
+| 非文本 | 先试 utf-8/gbk 能否干净解码，再查控制字符占比是否超过 2% |
+| 重复文件 | **先比字节**，内容相同就直接复用已有文件，不新建 |
+
+**重复文件那条值得说**：一开始只按文件名判重，传同一个文件三次就多出
+`sample_1_1.txt`、`sample_1_1_1.txt`。改成先比内容（大小 → 字节），
+一样的直接返回已有文件名，目录里就不会堆垃圾了。
+
+**工具返回值的坑**：`check_contract` 一开始只把最严重的 3 条给模型，
+结果模型回答「另外还有 2 条，建议你打开 contract_agent_sample_1.md 看完整清单」——
+而用户**根本打不开服务器上的文件**。现在改成把全部风险条款（上限 10 条）都给模型，
+并在 prompt 里明令禁止让用户去看文件。
+
+---
+
+### 前端页面
+
+浏览器打开 `http://127.0.0.1:8000/` 就是完整界面，代码在 `app/static/`（三个文件，约 1229 行）。
+
+**没有用 React/Vue，也没有构建步骤**——项目的卖点是 RAG 和 Agent，不是前端；
+引一套构建工具会带来和主线无关的东西。原生 HTML + JS 足够。
+
+**页面能做什么**：
+
+- 输入问题 → 答案**逐字出现**（SSE），工具调用折在气泡里
+- 答案里的 `[1]` `[2]` 可点，跳到下方「依据」并闪黄；依据可折叠
+- 左侧栏列出会话，可新建 / 切换 / 删除；刷新页面自动恢复上次会话
+- 空状态列出 `data/contracts` 下的示例合同，点一下就体检
+- 📎 上传合同（或直接拖进来）→ 出现附件条 → 「开始体检」看逐条进度，
+  也可以**直接在输入框提问**，比如「这份合同有什么坑」，Agent 会自己调体检工具
+
+**六个必须知道的坑**（都踩过）：
+
+- **不能用 `EventSource`。** 它只支持 GET，而提问要 POST JSON。
+  所以用 `fetch` + `response.body.getReader()` 手动读流、按 `\n\n` 切消息
+- **`TextDecoder` 必须传 `stream: true`，而且 decoder 要复用。**
+  一个汉字 3 个字节，网络 chunk 的边界完全可能把它切成两半，
+  不复用就会出乱码
+- **中文输入法按回车不能直接发送。** 要判 `e.isComposing`，
+  否则打拼音选词时一按回车消息就发出去了
+- **流式过程中不能每个 token 都重渲染 markdown。** 一个答案 300 个 token，
+  每次都重新解析是 O(n²)，长答案会明显卡。做法：流式时用 `textContent` 显示纯文本 +
+  闪烁光标，`done` 到了再一次性渲染
+- **转义必须发生在加标签之前。** 先 `escapeHtml` 再替换 `**加粗**`，
+  顺序反了就是 XSS 洞
+- **改了前端没生效，先怀疑浏览器缓存。** `StaticFiles` 默认不设 `Cache-Control`，
+  浏览器会自己猜一个缓存时间——你以为功能写错了，其实是它根本没去取新文件。
+  所以在 `app/main.py` 加了个中间件，给 `/` 和 `/static/` 都设上 `Cache-Control: no-cache`
+  （不是不缓存，是**用之前先问服务器有没有变**：没变回 304，不重传）
+
+**引用编号会重新排。** `RefPool` 的编号是跨多次检索连续的，答案里可能出现 `[7] [1] [4] [3]`。
+前端按「在本答案里出现的顺序」重编成 `1..n`，正文角标和依据列表同步；
+原始编号藏在 `data-oidx` 里用来查依据。只有能对上法条的 `[n]` 才做成角标，
+所以 `[2024]` 这种方括号和模型幻觉出的编号会保持原文，不会变成点了没反应的死角标。
 
 ---
 
@@ -679,11 +780,16 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 ```
 app/                    Web 层（FastAPI）
-  main.py                 6 个路由：health / ask / ask-stream / 会话三件套
+  main.py                 路由：health / ask / ask-stream / 会话三件套 / 合同三件套 / 首页
   schemas.py              Pydantic 请求/响应模型（自动校验 + 生成接口文档）
   deps.py                 检索器单例 + 按会话复用引用池 + 异步 checkpointer 连接
   streaming.py            SSE 流式生成器（生产者队列 + 心跳 + 事件过滤）
+  contract_stream.py      合同体检的 SSE 生成器（线程 + 队列 + 逐条进度）
   main_helpers.py         引用提取（两个接口共用，避免循环 import）
+  static/                 前端单页（浏览器打开 / 就能用）
+    index.html              页面结构：侧边栏 + 对话区 + 输入区
+    style.css               样式：气泡、表格、引用角标、折叠、进度圈
+    app.js                  全部逻辑：SSE 解析、markdown 渲染、会话管理
 data/
   raw/                  上游原始语料（约 33 MB，不提交；重建方式见上）
     _index.json               全量索引
@@ -712,7 +818,7 @@ data/
     contract_check_raw.json   体检的结构化结果（评估脚本读取）
     contract_eval.md          合同体检的量化评估
     contract_agent_result.md  Agent 三组场景的调用链与答案
-    contract_agent_sample_1.md  Agent 版体检生成的报告
+    contract_agent_sample_1.md Agent 版体检生成的报告（运行后生成，不提交）
     benchmark.md              性能与成本测量（冷启动 / 检索 / 端到端 / 体检）
     golden_set.jsonl          40 条测试集（含 gold 法条 id）
   src/

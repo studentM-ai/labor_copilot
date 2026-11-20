@@ -59,6 +59,7 @@ class MessageItem(BaseModel):
   """
   role:str=Field(...,description="human/ai/tool/system")
   content:str=Field(...,description="消息内容（工具截断到200字）")
+  citations:list[Citation]=Field(default_factory=list,description="这条回答引用到的法条（从历史里的工具消息还原）")
 
 class SessionMessagesResponse(BaseModel):
   """
@@ -66,3 +67,29 @@ class SessionMessagesResponse(BaseModel):
   """
   thread_id:str
   messages:list[MessageItem]=Field(default_factory=list)
+
+class ContractFile(BaseModel):
+  """
+  data/contracts下的一个合同文件
+  """
+  name:str=Field(...,description="文件名，如 sample_1.txt")
+  size:int=Field(...,description="文件字节数")
+
+class ContractsResponse(BaseModel):
+  """
+  可用合同列表
+  """
+  files:list[ContractFile]=Field(default_factory=list)
+
+class UploadResponse(BaseModel):
+  """
+  上传结果
+  """
+  filename:str=Field(...,description="实际存下来的文件名（重名会自动加后缀）")
+  size:int=Field(...,description="字节数")
+
+class ContractCheckRequest(BaseModel):
+  """
+  体检请求
+  """
+  filename:str=Field(...,min_length=1,max_length=200,description="要体检的合同文件名")
