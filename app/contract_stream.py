@@ -126,6 +126,7 @@ async def contract_check_stream(rt,filename):
           "total":len(clauses),
           "high":counts["high"],
           "medium":counts["medium"],
+          "none":counts["none"],
           "unknown":counts["unknown"],
           "warning":result.get("warning"),
           "report":report,

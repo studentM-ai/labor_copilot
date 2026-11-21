@@ -42,6 +42,10 @@ _runtime:Runtime | None=None
 
 #会话级状态：thread_id:RefPool
 _pools:dict[str,RefPool]={}
+
+# 池子最多存多少个会话。
+# 每个池子里是这个会话检索过的法条原文，不封顶的话进程越跑占得越多。
+MAX_POOLS=200
 _pools_lock=threading.Lock()    #互斥锁
 
 def init_runtime():
@@ -73,10 +77,17 @@ def get_pool(thread_id:str)->RefPool:
   """
   取某个会话的引用池，没有就新建
   加锁是因为fastapi用线程池跑同步代码可能会多请求同时来
+
+  需要封顶是因为池子里存着这个会话检索过的法条原文，一个会话几百字节到几 KB。
+  下次访问这个会话时会从历史里把编号补回来（见 restore_pool_async）。
   """
   with _pools_lock:
     pool=_pools.get(thread_id)  #拿到池对象
     if pool is None:
+      #dict 保持插入顺序，next(iter(...)) 拿到的就是最早建的那个
+      while len(_pools)>=MAX_POOLS:
+        oldest=next(iter(_pools))
+        _pools.pop(oldest,None) #删除最早建的那个
       pool=RefPool()
       _pools[thread_id]=pool
     return pool
@@ -117,6 +128,10 @@ async def open_agent_async(rt:Runtime,thread_id:str):
       "configurable":{"thread_id":thread_id},
       "recursion_limit":rt.limit
     }
+
+    #服务重启后内存池是空的，但历史还在 sqlite 里。不补的话，这一轮新检索到的法条会从 [1] 重新编号前端点角标会跳到错的条文。
+    if len(pool.items)==0:
+      await restore_pool_async(rt,agent,config,pool)
     yield agent,pool,config
 
 async def build_input_async(agent,config,question:str)->dict:
@@ -143,7 +158,7 @@ async def read_history(rt:Runtime,thread_id:str)->list[dict]:
   工具消息里本来就存着检索结果的原文，格式是：
     [3] 《中华人民共和国劳动合同法》第十九条
     劳动合同期限三个月以上不满一年的……
-  把这些条目抠出来，就得到「编号 -> 法条」，和当初 RefPool 里的内容一致。
+  把这些条目抠出来，就得到【编号 ： 法条】，和当初 RefPool 里的内容一致。
   然后复用 extract_citations，按答案里实际出现的 [n] 挑出来。
   """
   async with open_agent_async(rt,thread_id) as (agent,_pool,config):
@@ -211,6 +226,40 @@ def restore_pool_from_history(history):
     items.append(found.get(i,{"law_title":"","display_no":"","text":""}))
 
   return SimpleNamespace(items=items)
+
+
+async def restore_pool_async(rt:Runtime,agent,config,pool)->None:
+  """
+  服务重启后，把某个会话的内存引用池补回来
+
+  因为_pools 是内存里的字典，进程一重启就空了；但会话历史在 sqlite 里没丢。
+  不补的话：续聊时新检索到的法条会从 [1] 重新编号，前端点角标会跳到错的条文。
+
+  还原出来的条目只有法律名和条号，没有语料里的 id，而池子判段是否重叠靠 id。
+  所以拿 (法律名, 条号) 去全量语料里反查 id：
+  查到 -> 以后检索到同一条法条会复用这个编号（不会出现同一条两个编号）
+  查不到 -> 只是那一条不会被复用，编号本身仍然是对的
+  """
+  state=await agent.aget_state(config)
+  history=(state.values or {}).get("messages")or []
+
+  restored=restore_pool_from_history(history)
+  if restored is None:
+    return
+
+  pool.items=list(restored.items)
+  pool.by_id={}
+
+  #(法律名, 条号) -> id
+  index={}
+  for row in rt.retriever.rows: #遍历法条
+    index[(row.get("law_title",""),row.get("display_no",""))]=row.get("id") #设置（法律名，条号）：id
+
+  for i,it in enumerate(pool.items):
+    key=(it.get("law_title",""),it.get("display_no",""))  #拿到（法律名，条号）用来反查id
+    rid=index.get(key)
+    if rid is not None:
+      pool.by_id[rid]=i+1
 
 
 async def delete_session(rt:Runtime,thread_id:str)->bool:
