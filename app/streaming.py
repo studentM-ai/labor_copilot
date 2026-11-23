@@ -28,6 +28,7 @@ error        出错（此时 HTTP 状态码已经发出去了，改不了，只�
 """
 import asyncio,json,time
 
+from . import memory
 from . import deps
 from .main_helpers import extract_citations
 
@@ -51,7 +52,7 @@ def heartbeat()->str:
   """
   return ": keep-alive\n\n"
 
-async def sse_stream(question:str,thread_id:str):
+async def sse_stream(question:str,thread_id:str,user_id:str="anonymous"):
   """
   SSE生成器
   question：用户问题
@@ -65,7 +66,7 @@ async def sse_stream(question:str,thread_id:str):
 
   async with deps.open_agent_async(rt,thread_id) as (agent,pool,config):
     #续聊只传human
-    payload=await deps.build_input_async(agent,config,question)
+    payload=await deps.build_input_async(rt,agent,config,question,user_id)
   
     yield sse("status",{"stage":"thinking"})  #表示正在干活正在思考中
 
@@ -152,6 +153,11 @@ async def sse_stream(question:str,thread_id:str):
     return
 
   answer="".join(answer_parts)
+
+  #记忆：抽取 + 存储丢到后台，不 await ——
+  #因为抽取要调一次模型（1~2 秒），await 的话用户会在看到答案后多等 1~2 秒
+  memory.spawn(memory.remember_turn(rt,user_id,question,answer))
+
   elapsed_ms=int((time.perf_counter()-st)*1000)
   citations=extract_citations(answer,pool)
   yield sse("done",{

@@ -9,11 +9,12 @@ from pathlib import Path
 import time,uuid
 
 from dotenv import load_dotenv
-from fastapi import FastAPI,File,HTTPException,UploadFile
+from fastapi import FastAPI,File,Header,HTTPException,UploadFile
 from fastapi.responses import FileResponse,StreamingResponse
 from fastapi.staticfiles import StaticFiles    #把 app/static 目录挂到 /static
 
 from . import deps
+from . import memory
 from .contract_stream import contract_check_stream
 from .main_helpers import extract_citations,extract_tool_calls
 from .schemas import (
@@ -79,7 +80,7 @@ def health():
   return {"status":"ok"}
 
 @app.post("/api/ask",response_model=AskResponse)
-async def ask(req:AskRequest):
+async def ask(req:AskRequest,x_user_id:str=Header(default="anonymous")):
   """
   提问（非流式）
   """
@@ -89,7 +90,7 @@ async def ask(req:AskRequest):
   ts=time.perf_counter()
 
   async with deps.open_agent_async(rt,thread_id) as (agent,pool,config):
-    payload=await deps.build_input_async(agent,config,req.question)
+    payload=await deps.build_input_async(rt,agent,config,req.question,x_user_id)
     try:
       result=await agent.ainvoke(
         payload,
@@ -97,6 +98,9 @@ async def ask(req:AskRequest):
       )
     except Exception as e:
       raise HTTPException(status_code=500,detail=f"Agent执行失败:{e}")
+
+  #答案已经出来了，记忆抽取丢后台，不阻塞响应
+  memory.spawn(memory.remember_turn(rt,x_user_id,req.question,result["messages"][-1].content or ""))
 
   elapsed_ms=int((time.perf_counter()-ts) * 1000) #本次耗时
 
@@ -111,7 +115,7 @@ async def ask(req:AskRequest):
   )
 
 @app.post("/api/ask/stream")
-async def ask_stream(req:AskRequest):
+async def ask_stream(req:AskRequest,x_user_id:str=Header(default="anonymous")):
   """
   提问，sse流式
   header：
@@ -120,7 +124,7 @@ async def ask_stream(req:AskRequest):
   X-Accel-Buffering: no  关掉 nginx 的响应缓冲
   """
   return StreamingResponse(
-    sse_stream(req.question,req.thread_id or uuid.uuid4().hex),
+    sse_stream(req.question,req.thread_id or uuid.uuid4().hex,x_user_id),
     media_type="text/event-stream",
     headers={
       "Cache-Control": "no-cache",

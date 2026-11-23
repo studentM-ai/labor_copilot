@@ -4,7 +4,7 @@
 
 **当前进度**：语料管道、数据体检、检索基线、最小 RAG、向量检索、
 多工具 Agent、多轮对话与人工确认、混合检索对比、40 条测试集与检索评估、
-Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE 流式输出、多轮会话与持久化、前端页面、合同接口与文件上传已完成
+Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE 流式输出、多轮会话与持久化、前端页面、合同接口与文件上传、向量库（Milvus）、长期记忆已完成
 
 ---
 
@@ -39,6 +39,8 @@ Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE �
 - [x] 前端单页：SSE 逐字渲染、markdown（含表格）、引用角标可点并重编号、多会话侧边栏
 - [x] 合同接口：列表 / 上传（四道防护 + GBK 兜底 + 内容去重）/ 体检 SSE 逐条推进度
 - [x] 工具返回值修正：全量列出风险条款（上限 10 条），不再让用户去看服务器上的文件
+- [x] 向量库（Milvus）：1,251 条建 HNSW 索引，实测标量过滤与 `ef` 参数（该规模下 `ef` 不影响召回）
+- [x] 长期记忆：每轮抽用户事实存 Milvus（kind 枚举保证覆盖），新会话按 `user_id` 过滤召回 top-3
 
 ---
 
@@ -86,6 +88,9 @@ Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE �
   当前检索与生成均不使用该字段。
 - **规模有限**：主库 1,251 条，指标置信区间较宽，故评估更关注
   相对提升而非绝对值
+- **没有登录体系**：`user_id` 是浏览器本地生成的 UUID（存 localStorage），
+  所以换浏览器 / 无痕窗口就是新用户，同一浏览器换人用又会共享记忆。
+  长期记忆因此是「单浏览器级」的，生产必须换成账号体系
 
 ---
 
@@ -405,6 +410,190 @@ faithfulness 波动约 ±0.015，单条题目的分数波动可达 ±0.1。
 **一个设计考虑**：`check_contract` 收的是**文件名**而不是合同全文——
 传全文要模型一字不差转述上千字，容易漏抄且浪费 token；
 传文件名则和 `save_document(filename)` 的设计保持一致。
+
+---
+
+### 向量库（Milvus）
+
+前面的向量检索是**暴力检索**：`4.9 MB` 的 `articles_vec.npy` 全量放内存，
+一次矩阵乘法算完 1,251 条 —— `4 ms`、召回 100%。
+
+这一节把同一批向量搬进**向量数据库**（Milvus），目的有两个：
+**① 学向量库这一块**（企业 JD 里 Milvus / FAISS / 向量数据库出现频率很高）；
+**② 为后面的跨会话长期记忆铺路** —— 记忆条目要按用户过滤、要能增删，这两件事 numpy 做不了。
+
+#### 环境：三个容器，用 SeaweedFS 顶替 MinIO
+
+Milvus 单机版也要三个容器，因为它本来就是分布式架构：
+
+| 容器 | 作用 | 端口 |
+|---|---|---|
+| `milvus-standalone` | 计算（proxy / query / data / index 逻辑都在里面） | 19530（gRPC）、9091（健康检查） |
+| `milvus-etcd` | 元数据（collection、schema、索引定义） | 2379 |
+| `minio`（实际是 SeaweedFS） | 对象存储（向量段文件、索引文件） | 8333 |
+
+**⚠️ 部署时踩了一个坑：MinIO 的镜像拉不下来。**
+
+```
+minio/minio:latest          → denied              （Docker Hub 已限制）
+quay.io/minio/minio:latest  → 401 UNAUTHORIZED    （quay.io 要认证）
+bitnami/minio:latest        → denied
+```
+
+2025 年 MinIO 收紧了镜像分发。**但 Milvus 只需要一个 S3 端点，谁提供都行**，
+所以换成 S3 兼容的 **SeaweedFS**（`chrislusf/seaweedfs`）：
+
+```yaml
+  minio:
+    image: chrislusf/seaweedfs:latest
+    command: server -s3 -dir=/data -s3.port=8333
+```
+
+**Milvus 那边把 `MINIO_ADDRESS` 指向 `minio:8333` 即可，其他一行不用改。**
+
+**这件事本身就是可讲的点**：对象存储是**可替换的后端**，不是 Milvus 的一部分。
+
+#### 参数
+
+| 项 | 值 |
+|---|---|
+| 服务端 | `pkg/v2.5.4` |
+| 维度 / 度量 | 1024 / `COSINE`（bge-m3 已 L2 归一化，COSINE 与 IP 等价） |
+| 索引 | `HNSW`，`M=16`，`efConstruction=200` |
+| 查询参数 | `ef=64` |
+| 数据量 | 1,251 条 |
+
+#### 实测
+
+| 阶段 | 耗时 |
+|---|---|
+| 建 collection + 建索引 | 约 1.2 秒 |
+| 插入 1,251 条（分批 500） | 约 0.5 秒 |
+| `flush` 落盘 | 约 3 秒 |
+| 单次查询 | 约 6 ms |
+
+**查询结果和 numpy 版本完全一致**（同一批向量、同一个模型）：
+
+```
+0.7617  中华人民共和国劳动法            第二十一条
+0.7282  中华人民共和国劳动合同法        第十九条
+0.6468  中华人民共和国劳动合同法        第八十三条
+0.6302  中华人民共和国劳动合同法        第二十条
+0.6292  中华人民共和国劳动合同法实施条例  第十五条
+```
+
+#### 标量过滤：numpy 做不到的那件事
+
+```python
+client.search(..., filter='law_id == "labor-contract-law"')
+```
+
+**加过滤后 5 条全部来自《劳动合同法》** —— 把候选范围圈到一部法内。
+numpy 版本要实现这个，得先算出全部 1,251 个分数再手工过滤。
+
+#### `ef` 实测：这个数据量下不起作用
+
+| ef | 平均耗时（50 次） | 与 ef=512 的 top-5 重合 |
+|---|---|---|
+| 8 | 6.85 ms | 5/5 |
+| 16 | 5.57 ms | 5/5 |
+| 64 | 6.83 ms | 5/5 |
+| 256 | 5.08 ms | 5/5 |
+
+> **耗时在 5–7 ms 之间无规律波动**，与 `ef` 没有单调关系 ——
+> 因为本机单次 gRPC 往返就要 5–6 ms，而 1,251 条的 HNSW 搜索本身是亚毫秒级，
+> 差异全被 RPC 开销淹没了。
+>
+> 召回方面 `ef` 从 8 调到 512，top-5 完全一致，
+> 说明**这个数据量下 `ef` 不需要调**；数据量上到十万级才会成为真正的召回/延迟旋钮。
+
+#### 四个坑
+
+| 坑 | 现象 | 说明 |
+|---|---|---|
+| **`insert` 后 `row_count` 是 0** | 以为没插进去 | Milvus 先写内存后落盘，`flush` 之后统计才更新 |
+| **`flush` 不会让 `row_count` 减少** | 删了一条，`row_count` 不变 | 删除是**逻辑删除**（打墓碑），只有后台 **compaction** 合并段时才真正剔除，时机不可控 |
+| **`row_count` ≠ 有效条数** | 删 1 条 + 插回 1 条 → `row_count` 变 1252 | `row_count` 统计**物理行数**（含墓碑）；要有效条数用 `count(*)` |
+| **`VARCHAR` 的 `max_length` 是字符数** | `string exceeds max length` | 中文按一个字算，`text` 设 8192 |
+
+**→ 参数与实测完整记录：[`data/eval/milvus_basics.md`](data/eval/milvus_basics.md)**
+
+---
+
+### 长期记忆（跨会话）
+
+前面所有记忆都是**短期**的：`AsyncSqliteSaver` 按 `thread_id` 存档，只在一个会话里有效。
+换个会话就全忘了 —— 用户说过「月薪 12000、工作 3 年半」，下一句追问还是要重新问。
+
+长期记忆做的就是：**把用户的关键条件记下来，跨会话复用。**
+
+#### 三步
+
+```
+① 抽取   每轮回答结束后，让模型从这轮对话里抽 0~3 条「关于用户的事实」
+② 存储   编码成向量，upsert 进 Milvus（主键 = hash(user_id + kind)）
+③ 召回   新会话第一句时，按 user_id 过滤召回 top-3，拼进 SystemMessage
+```
+
+**实测（跨会话）：**
+
+```
+会话 A：我月薪 12000，在杭州工作，工作 3 年半，被裁了能拿多少
+        → 经济补偿金 48000 元
+
+会话 B（新建对话）：我能拿多少补偿
+        → 按你给的信息（工作 3 年半、月薪 12000），经济补偿金是 48000 元
+        → 没有再问「请问月薪多少」
+```
+
+**换个 `user_id` 问同样的话，它会重新追问条件** —— 说明 `filter=user_id` 真的在隔离。
+
+#### 三个关键设计
+
+**① `kind` 必须是枚举，不能自由起名**
+
+```python
+# 主键 = hash(user_id + kind)
+md5("u1|salary") == md5("u1|salary")     # 覆盖 ✅
+md5("u1|月薪")   != md5("u1|工资")        # 存成两条 ❌
+```
+
+kind 一旦漂移（这轮写「月薪」、下轮写「工资」），**主键就不同，`upsert` 覆盖直接失效**。
+所以 prompt 里强制用 8 个英文枚举（`work_years` / `salary` / `city` / `end_reason` /
+`contract` / `social_insurance` / `dispute_type` / `other`），代码里还有 `KIND_ALIASES` 兜底映射。
+
+**② 主键 = `hash(user_id + kind)`，不是随机 id**
+
+随机 id 会让用户说三次「月薪」存三条，互相挤占 top-3。
+用 `(用户, 类别)` 做哈希，同一个人的同一类事实**永远只有一条**，用户改口时自然覆盖。
+
+**③ 只在新会话注入，续聊不注入**
+
+续聊时模型已经能从历史里看到条件，再注入一遍是浪费 token；
+而且条件可能已经变了（用户后面改口），旧记忆反而误导。
+
+#### 一条铁律：记忆不能影响主流程
+
+| 环节 | 失败时 |
+|---|---|
+| 召回 | 返回空字符串，照常回答（只是「不记得你」） |
+| 抽取 + 存储 | 丢到后台任务（`spawn`），失败只打日志 |
+
+**抽取要调一次模型（1~2 秒），所以必须丢后台——否则用户看到答案后还要再等 1~2 秒。**
+后台任务用模块级 `set` 持有引用，否则可能被 GC 回收（Python 官方文档专门提过这个坑）。
+
+#### 已知局限：`user_id` 是前端自己编的
+
+项目**没有登录体系**，`user_id` 是浏览器第一次打开时生成的 UUID，存在 `localStorage`：
+
+```
+同一浏览器再打开  → 同一个 uid → 记得你 ✅
+换浏览器 / 无痕   → 新 uid    → 记忆从零 ❌
+同一浏览器换人用  → 同一个 uid → 共享记忆（隐私问题）❌
+```
+
+生产上这块必须换成账号体系（`user_id` 从用户表来）；
+另外要有过期/清理策略，否则用户清了浏览器数据后，旧记忆会变成无人认领的孤儿数据。
 
 ---
 
@@ -771,6 +960,9 @@ python scripts/W2/D11/019_contract_agent.py      # → contract_agent_result.md
 # 性能与成本测量（会跑 Agent 和一次合同体检，约 1 分钟）
 python scripts/W2/D12/020_benchmark.py           # → data/eval/benchmark.md
 
+# 向量库（需要先 cd milvus && docker compose up -d）
+python scripts/W4/D18/021_milvus_basics.py      # → data/eval/milvus_basics.md
+
 # Web 接口（启动后打开 http://127.0.0.1:8000/docs 试接口）
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
@@ -785,11 +977,15 @@ app/                    Web 层（FastAPI）
   deps.py                 检索器单例 + 按会话复用引用池 + 异步 checkpointer 连接
   streaming.py            SSE 流式生成器（生产者队列 + 心跳 + 事件过滤）
   contract_stream.py      合同体检的 SSE 生成器（线程 + 队列 + 逐条进度）
+    memory.py               长期记忆：抽取用户事实 → 存 Milvus → 新会话召回
   main_helpers.py         引用提取（两个接口共用，避免循环 import）
   static/                 前端单页（浏览器打开 / 就能用）
     index.html              页面结构：侧边栏 + 对话区 + 输入区
     style.css               样式：气泡、表格、引用角标、折叠、进度圈
     app.js                  全部逻辑：SSE 解析、markdown 渲染、会话管理
+milvus/                  Milvus 单机环境（docker compose）
+  docker-compose.yml      etcd + SeaweedFS(顶替 MinIO) + milvus-standalone
+  volumes/                数据卷（约 400 MB，不提交）
 data/
   raw/                  上游原始语料（约 33 MB，不提交；重建方式见上）
     _index.json               全量索引
@@ -820,6 +1016,7 @@ data/
     contract_agent_result.md  Agent 三组场景的调用链与答案
     contract_agent_sample_1.md Agent 版体检生成的报告（运行后生成，不提交）
     benchmark.md              性能与成本测量（冷启动 / 检索 / 端到端 / 体检）
+    milvus_basics.md          Milvus 建库/索引/ef/删除 实测与参数表
     golden_set.jsonl          40 条测试集（含 gold 法条 id）
   src/
     retriever.py           BM25 / 向量 / 混合三种检索器（新脚本统一从这里 import）
@@ -865,6 +1062,9 @@ data/
         019_contract_agent.py  三工具 + 三组场景测试
       D12/              性能与成本测量
         020_benchmark.py  冷启动 / 检索 / 端到端 / 合同体检
+    W4/                 第 4 周（向量库与长期记忆）
+      D18/              向量库 Milvus 基础操作
+        021_milvus_basics.py  Schema / HNSW 索引 / flush / 标量过滤 / ef 实测
   explain/                开发日志
 ```
 

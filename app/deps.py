@@ -13,6 +13,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver  #异步本地文�
 from types import SimpleNamespace
 import re
 
+from . import memory
 from .main_helpers import extract_citations
 
 from src.agent import build_graph
@@ -36,6 +37,7 @@ class Runtime:
   model:str="deepseek-chat"
   limit:int =20   # 递归上限，约 10 圈循环
   top_k:int=5
+  milvus_uri:str="http://localhost:19530"  #长期记忆用的 Milvus 地址
 
 # 模块级单例
 _runtime:Runtime | None=None
@@ -62,7 +64,8 @@ def init_runtime():
   rows=load_rows()
   retreiver=VectorRetriever(rows)
   db_path = os.path.join(ROOT, "data", "agent_checkpoints.db")
-  _runtime=Runtime(retriever=retreiver,api_key=api_key,db_path=db_path)
+  _runtime=Runtime(retriever=retreiver,api_key=api_key,db_path=db_path,
+    milvus_uri=os.getenv("MILVUS_URI","http://localhost:19530"))
   return _runtime
 
 def get_runtime()->Runtime:
@@ -134,18 +137,32 @@ async def open_agent_async(rt:Runtime,thread_id:str):
       await restore_pool_async(rt,agent,config,pool)
     yield agent,pool,config
 
-async def build_input_async(agent,config,question:str)->dict:
+async def build_input_async(rt,agent,config,question:str,user_id:str="anonymous")->dict:
   """
-  决定这一轮要往图里塞入什么消息
-  如果是续聊则只穿HumanMessage，不穿System，因为它会作为新消息加入历史末尾，会冗余重复
-  利用aget_state拿到thread状态判断是不是续聊  如果是新会话那么values是空字典
+  决定这一轮要往图里塞什么消息
+
+  续聊：只传 HumanMessage（不传 System，否则历史里会重复堆 System）
+  新会话：System(QA_PROMPT) + Human(问题)
+
+  长期记忆只在新会话注入
+  
   """
-  state=await agent.aget_state(config)  #拿到状态
-  history=(state.values or {}).get("messages")or [] #拿到内容
-  if history: #如果有内容则续聊
-    return {"messages":[HumanMessage(content=question)]}  #续聊加问题
+  state=await agent.aget_state(config)
+  history=(state.values or {}).get("messages")or []
+
+  if history:
+    return {"messages":[HumanMessage(content=question)]}
+
+  #新会话：先看有没有这个用户的记忆
+  system=QA_PROMPT
+  if user_id and user_id!="anonymous":
+    block=await memory.memory_context(rt,user_id,question)
+    if block:
+      system=system+"\n\n【关于这位用户的已知信息】\n"+block
+      print("[memory] 注入记忆：",block)
+
   return {"messages":[
-    SystemMessage(content=QA_PROMPT),
+    SystemMessage(content=system),
     HumanMessage(content=question)
   ]}
 

@@ -221,3 +221,7 @@ app/schemas.py新增四个模型：合同文件，可用合同列表，上传结
 首先需要打开docker desktop ，然后创建milvus文件夹，拉取docker-compose.yml文件；docker compose up -d起容器，在这途中，我的minio拉不起，只能用SeaweedFS来代替；随后下载pymilvus环境包；\
 随后新建文件021来设置milvus的基础操作，对检索进行评估，比如普通查询与标量过滤，最后生成报告\
 得到结果：代码跑通且数据最长，ef 从 8 调到 512，top-5 完全一致；耗时在 5.7–7.0 ms 之间无规律波动——因为单次 gRPC 往返就 5–6 ms，而搜索本身是亚毫秒级。结论是这个数据量下 ef 不用调。
+
+>Day19:制作长期记忆，提炼用户事实
+新增memory.py文件，写抽取prompt在src/prompt.py里\
+修改deps中runtime，里面加上milvus的url，streaming里的sse_stream与build_input_async 加上userid\

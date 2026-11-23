@@ -6,6 +6,40 @@
 const STORAGE_KEY = "copilot_sessions";
 const CURRENT_KEY = "copilot_current";
 
+/* ---------- 长期记忆用的用户 id ----------
+ *
+ * 【为什么要这个东西】
+ *   短期记忆按 thread_id 存（一次会话），长期记忆必须按「人」存。
+ *   项目没有登录体系，所以用浏览器本地生成的一个匿名 id 代替。
+ *
+ * 【为什么存在 localStorage】
+ *   关掉浏览器再打开还是同一个人 —— 这正是"长期记忆"要的效果。
+ *   如果放内存变量，刷新页面就变成新用户，记忆全丢。
+ *
+ * 【怎么用】
+ *   每个 /api/* 请求带一个 "X-User-Id" 头，后端据此隔离记忆。
+ */
+const USER_ID_KEY = "copilot_uid";
+
+function getUserId() {
+  let uid = localStorage.getItem(USER_ID_KEY);
+
+  // 没有就生成一个。crypto.randomUUID 不是所有环境都有，兜底用时间戳 + 随机数
+  if (!uid) {
+    if (window.crypto && crypto.randomUUID) {
+      uid = crypto.randomUUID();
+    } else {
+      uid = "u" + Date.now() + "-" + Math.random().toString(16).slice(2);
+    }
+    localStorage.setItem(USER_ID_KEY, uid);
+    console.log("[memory] 生成新的用户 id:", uid);
+  }
+
+  return uid;
+}
+
+const USER_ID = getUserId();
+
 let currentThreadId = null;
 let streaming = false;
 let abortCtrl = null;
@@ -570,7 +604,11 @@ async function openSession(id) {
 async function streamSSE(url, body, onEvent) {
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      // 长期记忆靠这个头区分「是谁」，后端用它做 Milvus 的 user_id 过滤
+      "X-User-Id": USER_ID,
+    },
     body: JSON.stringify(body),
     signal: abortCtrl ? abortCtrl.signal : undefined,
   });
@@ -780,7 +818,13 @@ async function uploadFile(file) {
   elUploadBtn.disabled = true;
   elUploadBtn.textContent = "⏳";
   try {
-    const resp = await fetch("/api/contracts/upload", { method: "POST", body: form });
+    const resp = await fetch("/api/contracts/upload", {
+      method: "POST",
+      // 用 FormData 时千万别手动设 Content-Type（会让 boundary 丢掉），
+      // 但自定义头是可以加的
+      headers: { "X-User-Id": USER_ID },
+      body: form,
+    });
     if (!resp.ok) {
       let detail = "";
       try {
