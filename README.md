@@ -4,7 +4,7 @@
 
 **当前进度**：语料管道、数据体检、检索基线、最小 RAG、向量检索、
 多工具 Agent、多轮对话与人工确认、混合检索对比、40 条测试集与检索评估、
-Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE 流式输出、多轮会话与持久化、前端页面、合同接口与文件上传、向量库（Milvus）、长期记忆已完成
+Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE 流式输出、多轮会话与持久化、前端页面、合同接口与文件上传、向量库（Milvus）、长期记忆、检索双后端与选型已完成
 
 ---
 
@@ -41,6 +41,7 @@ Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE �
 - [x] 工具返回值修正：全量列出风险条款（上限 10 条），不再让用户去看服务器上的文件
 - [x] 向量库（Milvus）：1,251 条建 HNSW 索引，实测标量过滤与 `ef` 参数（该规模下 `ef` 不影响召回）
 - [x] 长期记忆：每轮抽用户事实存 Milvus（kind 枚举保证覆盖），新会话按 `user_id` 过滤召回 top-3
+- [x] 检索双后端：`VECTOR_BACKEND=numpy|milvus` 切换，实测 numpy 快 13 倍、召回 100/100
 
 ---
 
@@ -597,6 +598,56 @@ kind 一旦漂移（这轮写「月薪」、下轮写「工资」），**主键�
 
 ---
 
+### 检索后端选型（numpy vs Milvus）
+
+法条检索做了两套**接口完全一致**的实现，用环境变量切换：
+
+| 后端 | 实现 | 默认 |
+|---|---|---|
+| `numpy` | `VectorRetriever`：`articles_vec.npy` 全量矩阵乘法 | ✅ 是 |
+| `milvus` | `MilvusRetriever`：D18 灌进去的 `law_articles` | 可选 |
+
+```powershell
+$env:VECTOR_BACKEND="milvus"    # 不设则用 numpy
+```
+
+**「同接口」的意思是三个东西都对齐：**
+`retrieve(query, k)` 返回同样的 `list[dict]`、都暴露 `.rows`（引用池重建要用）、
+都暴露 `.model`（长期记忆编码要用）。所以 `make_search_law` / `check_contract` /
+`deps` / `memory` **一行都不用改**。
+
+**实测**（20 条 query，每条 5 次，首次丢弃）：
+
+| 项 | numpy | Milvus |
+|---|---|---|
+| 纯检索 P50 | **0.36 ms** | **4.71 ms** |
+| 纯检索 P95 | 0.45 ms | 7.76 ms |
+| 编码 P50 | 106.51 ms | 107.55 ms |
+| 元数据过滤 P50 | 0.43 ms | 5.00 ms |
+| 召回一致性（top-5 重合） | 基准 | **100 / 100** |
+
+**结论：默认 numpy。**
+
+- **快 13 倍**（0.36 vs 4.71 ms），差异来自 gRPC 往返而非图搜索
+- **召回完全一致** —— 1,251 条这个规模下 HNSW 的近似误差为 0
+- **编码占 99.7%** —— 检索差几毫秒，用户根本感觉不到
+
+**那 Milvus 什么时候用？** 不是「检索更快」，而是它独有的能力：
+
+| 能力 | numpy | Milvus |
+|---|---|---|
+| 元数据过滤 | 全量打分后手写过滤 | `filter=` 一个参数 |
+| 增量更新 | 重建整个 `.npy` | `upsert` / `delete` |
+| 多租户隔离 | 自己维护 id ↔ 下标映射 | `filter=user_id==...` |
+| 横向扩容 | 换更强的机器 | 加 query node |
+
+数据量涨到十万级时需要重新评估，但那时候必须真实扩容后重测——外推不可靠
+（numpy 的 `argsort` 是 O(N log N)，HNSW 的图也会随数据量变大）。
+
+**→ 完整数据见 [`data/eval/vector_store_compare.md`](data/eval/vector_store_compare.md)**
+
+---
+
 ### 性能与成本
 
 冷启动（只发生一次，两次实测）：
@@ -963,6 +1014,12 @@ python scripts/W2/D12/020_benchmark.py           # → data/eval/benchmark.md
 # 向量库（需要先 cd milvus && docker compose up -d）
 python scripts/W4/D18/021_milvus_basics.py      # → data/eval/milvus_basics.md
 
+# 检索后端对比（需要 Milvus 起着；约 1 分钟）
+python scripts/W4/D20/022_vector_store_bench.py  # → data/eval/vector_store_compare.md
+
+# 切换检索后端（不设则用 numpy）
+# $env:VECTOR_BACKEND="milvus"
+
 # Web 接口（启动后打开 http://127.0.0.1:8000/docs 试接口）
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
@@ -1017,9 +1074,10 @@ data/
     contract_agent_sample_1.md Agent 版体检生成的报告（运行后生成，不提交）
     benchmark.md              性能与成本测量（冷启动 / 检索 / 端到端 / 体检）
     milvus_basics.md          Milvus 建库/索引/ef/删除 实测与参数表
+    vector_store_compare.md   numpy vs Milvus 的延迟 / 召回 / 过滤对比
     golden_set.jsonl          40 条测试集（含 gold 法条 id）
   src/
-    retriever.py           BM25 / 向量 / 混合三种检索器（新脚本统一从这里 import）
+    retriever.py           BM25 / 向量 / 混合 / Milvus 四种检索器（后两者同接口，可切换）
     citation.py            引用池 RefPool（多次检索编号不串台）
     contract.py            合同体检核心：切分 + 逐条判断
     agent.py               Agent 图：模型节点 + 工具节点 + 循环判断
@@ -1062,9 +1120,11 @@ data/
         019_contract_agent.py  三工具 + 三组场景测试
       D12/              性能与成本测量
         020_benchmark.py  冷启动 / 检索 / 端到端 / 合同体检
-    W4/                 第 4 周（向量库与长期记忆）
+    W4/                 第 4 周（向量库与检索选型）
       D18/              向量库 Milvus 基础操作
         021_milvus_basics.py  Schema / HNSW 索引 / flush / 标量过滤 / ef 实测
+      D20/              检索后端对比
+        022_vector_store_bench.py  numpy vs Milvus：延迟 / 召回 / 过滤 / 冷启动
   explain/                开发日志
 ```
 

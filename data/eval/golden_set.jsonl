@@ -8,7 +8,33 @@
 {"id": "q08", "question": "女员工怀孕能被辞退吗", "gold_law_ids": ["xzfg-4eb3304079-0005"], "type": "kouyu", "must_refuse": false}
 {"id": "q09", "question": "劳动仲裁要多久", "gold_law_ids": ["labor-dispute-mediation-arbitration-law-0043"], "type": "kouyu", "must_refuse": false}
 {"id": "q10", "question": "拖欠工资找谁", "gold_law_ids": ["xzfg-2d114901d5-0009", "xzfg-f764e4b761-0010"], "type": "kouyu", "must_refuse": false}
-{"id": "q11", "question": "房东不退我押金怎么办", "gold_law_ids": [], "type": "out_of_scope", "must_refuse": true}
-{"id": "q12", "question": "延长工作时间 百分之一百五十 工资报酬", "gold_law_ids": ["labor-law-0044"], "type": "term", "must_refuse": false}
-{"id": "q13", "question": "裁减人员 二十人以上 提前三十日 说明情况", "gold_law_ids": ["labor-contract-law-0041"], "type": "term", "must_refuse": false}
-{"id": "q14", "question": "不能胜任工作 经过培训 调整工作岗位 提前三十日", "gold_law_ids": ["labor-contract-law-0040"], "type": "term", "must_refuse": false}
+{"id": "q11", "question": "产假有多少天", "gold_law_ids": ["xzfg-4eb3304079-0007"], "type": "kouyu", "must_refuse": false}
+{"id": "q12", "question": "公司能随便给我调岗降薪吗", "gold_law_ids": ["labor-contract-law-0035"], "type": "kouyu", "must_refuse": false}
+{"id": "q13", "question": "试用期被辞退有补偿吗", "gold_law_ids": ["labor-contract-law-0039", "labor-contract-law-0046"], "type": "kouyu", "must_refuse": false}
+{"id": "q14", "question": "年假没休完怎么办", "gold_law_ids": ["xzfg-df951803c0-0005"], "type": "kouyu", "must_refuse": false}
+{"id": "q15", "question": "工伤期间工资怎么算", "gold_law_ids": ["xzfg-8e4ae5638e-0033"], "type": "kouyu", "must_refuse": false}
+{"id": "q16", "question": "拖欠工资能要赔偿金吗", "gold_law_ids": ["labor-contract-law-0085"], "type": "kouyu", "must_refuse": false}
+{"id": "q17", "question": "什么情况下可以主动辞职还要补偿", "gold_law_ids": ["labor-contract-law-0038", "labor-contract-law-0046"], "type": "kouyu", "must_refuse": false}
+{"id": "q18", "question": "劳动仲裁的时效是多久", "gold_law_ids": ["labor-dispute-mediation-arbitration-law-0027"], "type": "kouyu", "must_refuse": false}
+{"id": "q19", "question": "延长工作时间 百分之一百五十 工资报酬", "gold_law_ids": ["labor-law-0044"], "type": "term", "must_refuse": false}
+{"id": "q20", "question": "裁减人员 二十人以上 提前三十日 说明情况", "gold_law_ids": ["labor-contract-law-0041"], "type": "term", "must_refuse": false}
+{"id": "q21", "question": "不能胜任工作 经过培训 调整工作岗位 提前三十日", "gold_law_ids": ["labor-contract-law-0040"], "type": "term", "must_refuse": false}
+{"id": "q22", "question": "用人单位 单方解除劳动合同 事先通知工会", "gold_law_ids": ["labor-contract-law-0043"], "type": "term", "must_refuse": false}
+{"id": "q23", "question": "女职工 产假 九十八天 难产 多胞胎", "gold_law_ids": ["xzfg-4eb3304079-0007"], "type": "term", "must_refuse": false}
+{"id": "q24", "question": "停工留薪期 原工资福利待遇 不变", "gold_law_ids": ["xzfg-8e4ae5638e-0033"], "type": "term", "must_refuse": false}
+{"id": "q25", "question": "未休年休假 日工资收入 百分之三百", "gold_law_ids": ["xzfg-df951803c0-0005"], "type": "term", "must_refuse": false}
+{"id": "q26", "question": "用人单位 未依法缴纳社会保险费 劳动者解除劳动合同", "gold_law_ids": ["labor-contract-law-0038"], "type": "term", "must_refuse": false}
+{"id": "q27", "question": "我工作 3 年半月薪 12000，公司以不能胜任为由辞退我，还欠我 2 个月工资，一共能主张多少钱", "gold_law_ids": ["labor-contract-law-0047", "labor-law-0050"], "type": "duobu", "must_refuse": false}
+{"id": "q28", "question": "试用期约定了 6 个月但合同只签 1 年，超期部分能要赔偿吗", "gold_law_ids": ["labor-contract-law-0019", "labor-contract-law-0083"], "type": "duobu", "must_refuse": false}
+{"id": "q29", "question": "公司一直不给我交社保，我主动辞职能要经济补偿吗", "gold_law_ids": ["labor-contract-law-0038", "labor-contract-law-0046"], "type": "duobu", "must_refuse": false}
+{"id": "q30", "question": "工伤之后公司想把我辞退，合法吗", "gold_law_ids": ["labor-contract-law-0042", "xzfg-8e4ae5638e-0033"], "type": "duobu", "must_refuse": false}
+{"id": "q31", "question": "竞业协议里没写补偿，这个协议还有效吗", "gold_law_ids": ["labor-contract-law-0023", "labor-contract-law-0024"], "type": "duobu", "must_refuse": false}
+{"id": "q32", "question": "公司拖欠工资 3 个月，我能直接辞职并要补偿吗", "gold_law_ids": ["labor-contract-law-0038", "labor-contract-law-0046"], "type": "duobu", "must_refuse": false}
+{"id": "q33", "question": "怀孕期间公司给我调岗降薪，合法吗", "gold_law_ids": ["xzfg-4eb3304079-0005", "labor-contract-law-0035"], "type": "duobu", "must_refuse": false}
+{"id": "q34", "question": "公司说我不能胜任工作要辞退，但没培训也没调岗，合法吗", "gold_law_ids": ["labor-contract-law-0040"], "type": "duobu", "must_refuse": false}
+{"id": "q35", "question": "房东不退我押金怎么办", "gold_law_ids": [], "type": "out_of_scope", "must_refuse": true}
+{"id": "q36", "question": "离婚财产怎么分割", "gold_law_ids": [], "type": "out_of_scope", "must_refuse": true}
+{"id": "q37", "question": "朋友借钱不还能起诉吗", "gold_law_ids": [], "type": "out_of_scope", "must_refuse": true}
+{"id": "q38", "question": "买房交了定金能退吗", "gold_law_ids": [], "type": "out_of_scope", "must_refuse": true}
+{"id": "q39", "question": "交通事故对方全责怎么索赔", "gold_law_ids": [], "type": "out_of_scope", "must_refuse": true}
+{"id": "q40", "question": "别的公司欠我货款一直不还怎么办", "gold_law_ids": [], "type": "out_of_scope", "must_refuse": true}

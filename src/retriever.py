@@ -10,6 +10,7 @@ from pathlib import Path
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
+from pymilvus import MilvusClient
 
 # 参数默认值 和之前的一样
 K1 = 1.5  #词频饱和速度
@@ -188,16 +189,48 @@ class HybridRetriever:
       result.append(self.id_to_row[this_id])
     return result
 
+class MilvusRetriever:
+  """
+  和VectorRertriever要有同属性，但检索走Milvus
+  这是因为 make_search_law / check_contract / deps 都只依赖三样东西rows,model,retrieve
+  """
+  def __init__(self,rows,uri="http://localhost:19530",collection="law_articles"):
+    self.rows=rows
+    #按id建立索引，检索从Milvus拿回id后，用其取回完整的那一行  为了确保和vr一样
+    self._by_id={}
+    for r in rows:
+      self._by_id[r["id"]]=r
 
+    self.uri=uri
+    self.collection=collection
+    self.client=MilvusClient(uri=uri)
 
+    #重启服务可能会出现collection没有load的状态
+    if self.client.has_collection(collection):
+      self.client.load_collection(collection)
 
+    self.model=SentenceTransformer("BAAI/bge-m3")
 
+  def retrieve(self,query,k=TOP_K):
+    """
+    检索返回k条
+    """
+    #编码 同样归一化
+    q_vec=self.model.encode([query],normalize_embeddings=True)[0].tolist()
+    res=self.client.search(
+      collection_name=self.collection,
+      data=[q_vec],
+      limit=k,
+      output_fields=["id","law_id","law_title","display_no","text"],
+      search_params={"metric_type":"COSINE","params":{"ef":64}},
+    )
 
-    
-
-
-
-    
-
+    result=[]
+    for hit in res[0]:
+      rid=hit["entity"]["id"]
+      row=self._by_id.get(rid)
+      if row is not None:
+        result.append(row)
+    return result
 
 

@@ -225,3 +225,8 @@ app/schemas.py新增四个模型：合同文件，可用合同列表，上传结
 >Day19:制作长期记忆，提炼用户事实
 新增memory.py文件，写抽取prompt在src/prompt.py里\
 修改deps中runtime，里面加上milvus的url，streaming里的sse_stream与build_input_async 加上userid\
+
+>Day20:法条检索对比，用milvusRetriever 与向量检索器进行对比 看它们的数据
+在src/retreiver.py下新增Milvus检索器，这个检索器的大致属性要与向量检索器差不多/
+在deps.py里设置利用环境变量切换检索器，新建022检索对比脚本得到结果/
+在低体量的数据量下，用numpy向量检索速度更快一些，所以默认用这个

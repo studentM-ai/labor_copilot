@@ -22,6 +22,7 @@ from src.contract import load_rows
 from src.prompts import QA_PROMPT
 from src.retriever import VectorRetriever
 from src.tools import make_calc_severance,make_check_contract,make_search_law
+from src.retriever import MilvusRetriever
 
 #项目根
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -31,7 +32,7 @@ class Runtime:
   """
   应用级共享状态（启动时创建一次）
   """
-  retriever:VectorRetriever
+  retriever:object
   api_key:str
   db_path:str
   model:str="deepseek-chat"
@@ -62,7 +63,17 @@ def init_runtime():
     raise RuntimeError("没读到DEEPSEEK_API_KEY，检查 .env")
 
   rows=load_rows()
-  retreiver=VectorRetriever(rows)
+  #【检索后端切换】默认 numpy（exact search），设 VECTOR_BACKEND=milvus 就走 Milvus
+  backend=os.getenv("VECTOR_BACKEND","numpy").strip().lower()
+
+  if backend=="milvus":
+    #延迟导入：不用 Milvus 的时候连这个类都不加载
+    retreiver=MilvusRetriever(rows,uri=os.getenv("MILVUS_URI","http://localhost:19530"))
+    print("[deps] 检索后端：Milvus（HNSW 近似检索）",flush=True)
+  else:
+    retreiver=VectorRetriever(rows)
+    print("[deps] 检索后端：numpy（向量）",flush=True)
+
   db_path = os.path.join(ROOT, "data", "agent_checkpoints.db")
   _runtime=Runtime(retriever=retreiver,api_key=api_key,db_path=db_path,
     milvus_uri=os.getenv("MILVUS_URI","http://localhost:19530"))
