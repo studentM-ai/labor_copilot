@@ -169,3 +169,4 @@ milvus/volumes/seaweedfs/m9333/log
 milvus/volumes/seaweedfs/m9333/max_volume_id
 milvus/volumes/seaweedfs/m9333/state
 milvus/volumes/seaweedfs/m9333/snapshot/0_4.ss
+data/logs/app.jsonl

@@ -4,7 +4,7 @@
 
 **当前进度**：语料管道、数据体检、检索基线、最小 RAG、向量检索、
 多工具 Agent、多轮对话与人工确认、混合检索对比、40 条测试集与检索评估、
-Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE 流式输出、多轮会话与持久化、前端页面、合同接口与文件上传、向量库（Milvus）、长期记忆、检索双后端与选型已完成
+Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE 流式输出、多轮会话与持久化、前端页面、合同接口与文件上传、向量库（Milvus）、长期记忆、检索双后端与选型、可观测性已完成
 
 ---
 
@@ -42,6 +42,7 @@ Ragas 生成评估、合同体检、性能成本测量、FastAPI 接口、SSE �
 - [x] 向量库（Milvus）：1,251 条建 HNSW 索引，实测标量过滤与 `ef` 参数（该规模下 `ef` 不影响召回）
 - [x] 长期记忆：每轮抽用户事实存 Milvus（kind 枚举保证覆盖），新会话按 `user_id` 过滤召回 top-3
 - [x] 检索双后端：`VECTOR_BACKEND=numpy|milvus` 切换，实测 numpy 快 13 倍、召回 100/100
+- [x] 可观测性：每请求一行 JSON（request_id / 耗时 / token / 工具 / 状态），`/api/stats` 汇总 P95 与错误率
 
 ---
 
@@ -691,6 +692,92 @@ Agent 端到端（两次实测）：
 
 ---
 
+### 可观测性（线上日志与统计）
+
+上面的「性能与成本」是**离线测**的 —— 要跑一遍脚本才有一个数字。
+但线上跑了多少、谁慢、慢在哪、花了多少 token，它**答不了**。
+
+可观测性补的就是这一块：**每个请求写一行 JSON，`GET /api/stats` 汇总。**
+
+#### 每请求一行，写在 `data/logs/app.jsonl`
+
+```json
+{"ts":"2026-11-25T17:36:48","request_id":"24ef4d65","kind":"ask_stream",
+ "thread_id":"12f8...","user_id":"161b...","question_len":11,
+ "elapsed_ms":5290,"tokens_in":2552,"tokens_out":551,
+ "tools":["search_law","search_law"],"status":"ok","answer_len":840}
+```
+
+**不记问题原文，只记 `question_len`** —— 工资、纠纷这些是隐私。
+
+#### 三个必须做对的地方
+
+**① `request_id` 用 `contextvars` 传，不用全局变量**
+
+asyncio 是单线程并发，`await` 的时候事件循环会切去跑别的协程 ——
+全局变量会被另一个请求覆盖；`threading.local` 也不行（所有协程在同一个线程里）。
+`contextvars` 按协程任务隔离，所以两行日志不会串号。
+
+**② token 只能从 `on_chat_model_end` 拿**
+
+`on_chat_model_stream` 的 chunk 上**没有** `usage_metadata`（那只是一小段文字），
+只有生成结束时的事件才有。而且一次请求可能有多轮（工具调用 → 模型再来一次），所以必须**累加**。
+
+**③ 日志写在最外层的 `finally` 里**
+
+最需要排查的恰恰是「客户端中途断开」和「模型报错」这两类请求。
+如果写在 `yield done` 之后，这些请求**一条日志都不会留下**。
+
+顺带解决了「断开和正常完成看起来一样」的问题：用一个 `finished` 标志，
+在 `yield done` **之前**置位，`finally` 里就能分出三种状态：
+
+| status | 含义 |
+|---|---|
+| `ok` | 正常发完 `done` |
+| `error` | 模型/工具报错 |
+| `aborted` | **客户端中途断开** |
+
+#### `GET /api/stats`
+
+只读最近 500 条（全量读在 demo 规模没必要，也会越跑越慢）：
+
+```json
+{"window":8,"total":8,"error_rate":0.125,
+ "latency_p50_ms":17450.0,"latency_p95_ms":24278.0,"latency_max_ms":24278.0,
+ "slow_requests":5,"tokens_in":16632,"tokens_out":3353,"tokens_avg":2498.1,
+ "tools":{"search_law":11,"calc_severance":1}}
+```
+
+#### 实测 8 个请求，读出三个问题
+
+| 耗时 | 工具调用 | tokens_in | 结果 |
+|---|---|---|---|
+| 24,278 ms | search_law × 2 | 2,502 | ok |
+| 17,450 ms | search_law × 2 | 2,561 | ok |
+| 23,207 ms | search_law + calc | 937 | **aborted** |
+| 5,290 ms | search_law × 2 | 2,552 | ok |
+| 2,495 ms | **无** | 2,100 | ok |
+| 1,469 ms | **无** | 928 | ok |
+
+**① 有工具调用慢 3–10 倍**
+
+无工具 1.5–2.5 秒，两次 `search_law` 要 5–24 秒。
+因为**每次工具调用都是一整轮模型请求** —— 两次检索 = 三轮模型。
+
+**② token 输入/输出比约 5:1，瓶颈在上下文不在生成**
+
+`tokens_in 16,632` vs `tokens_out 3,353`。钱花在「塞进去多少法条和对话历史」上，
+不在「模型写多长」。
+
+**③ `aborted` 那行是 `finally` 存在的证据**
+
+只吐了 7 个字就被掐断，`tokens_in` 只花了 937（正常要 2,500）。
+这行日志证明了「断开也留痕」，也顺带量出了「用户等不及会损失多少成本」。
+
+**→ 完整数据见 [`data/eval`](data/eval) 同名日志，或直接看 `data/logs/app.jsonl`**
+
+---
+
 ### Web 接口
 
 把 Agent 包成 HTTP 服务，代码在 `app/` 目录。
@@ -1034,7 +1121,8 @@ app/                    Web 层（FastAPI）
   deps.py                 检索器单例 + 按会话复用引用池 + 异步 checkpointer 连接
   streaming.py            SSE 流式生成器（生产者队列 + 心跳 + 事件过滤）
   contract_stream.py      合同体检的 SSE 生成器（线程 + 队列 + 逐条进度）
-    memory.py               长期记忆：抽取用户事实 → 存 Milvus → 新会话召回
+  observability.py        结构化日志（每请求一行 JSON）+ request_id + 统计汇总
+  memory.py               长期记忆：抽取用户事实 → 存 Milvus → 新会话召回
   main_helpers.py         引用提取（两个接口共用，避免循环 import）
   static/                 前端单页（浏览器打开 / 就能用）
     index.html              页面结构：侧边栏 + 对话区 + 输入区

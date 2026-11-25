@@ -24,6 +24,7 @@ from .schemas import (
 )
 from .streaming import sse_stream
 from src.contract import CONTRACTS,decode_bytes_smart,list_contracts
+from . import observability
 
 load_dotenv()
 
@@ -85,6 +86,8 @@ async def ask(req:AskRequest,x_user_id:str=Header(default="anonymous")):
   提问（非流式）
   """
   rt=deps.get_runtime()
+  #入口设请求id
+  observability.set_request_id(observability.new_request_id())
 
   thread_id=req.thread_id or uuid.uuid4().hex
   ts=time.perf_counter()
@@ -103,13 +106,34 @@ async def ask(req:AskRequest,x_user_id:str=Header(default="anonymous")):
   memory.spawn(memory.remember_turn(rt,x_user_id,req.question,result["messages"][-1].content or ""))
 
   elapsed_ms=int((time.perf_counter()-ts) * 1000) #本次耗时
+  
+  #非流式直接从最后一条AImessage的usage_metadata拿
+  tokens_in,tokens_out=observability.usage_of(result["messages"])
+
 
   # 最后一条消息就是最终答案
   answer = result["messages"][-1].content or ""
+
+  tool_calls = extract_tool_calls(result["messages"])
+
+  #写日志
+  observability.log_event({
+    "kind":"ask",
+    "thread_id":thread_id,
+    "user_id":x_user_id,
+    "question_len":len(req.question),
+    "elapsed_ms":elapsed_ms,
+    "tokens_in": tokens_in,
+    "tokens_out": tokens_out,
+    "tools": [t.name for t in tool_calls],
+    "status": "ok",
+    "answer_len": len(answer),
+  })
+
   return AskResponse(
     answer=answer,
     citations=extract_citations(answer,pool),
-    tool_calls=extract_tool_calls(result["messages"]),
+    tool_calls=tool_calls,
     thread_id=thread_id,
     elapsed_ms=elapsed_ms
   )
@@ -123,6 +147,7 @@ async def ask_stream(req:AskRequest,x_user_id:str=Header(default="anonymous")):
   Connection: keep-alive 保持长连接
   X-Accel-Buffering: no  关掉 nginx 的响应缓冲
   """
+  observability.set_request_id(observability.new_request_id())
   return StreamingResponse(
     sse_stream(req.question,req.thread_id or uuid.uuid4().hex,x_user_id),
     media_type="text/event-stream",
@@ -130,6 +155,7 @@ async def ask_stream(req:AskRequest,x_user_id:str=Header(default="anonymous")):
       "Cache-Control": "no-cache",
       "Connection": "keep-alive",
       "X-Accel-Buffering": "no",
+      "X-Request-Id": observability.get_request_id(),
     }
 
   )
@@ -289,3 +315,10 @@ async def contract_check(req:ContractCheckRequest):
       "X-Accel-Buffering":"no",
     }
   )
+
+@app.get("/api/stats")
+def stats(limit:int=500):
+  """
+  请求统计
+  """
+  return observability.build_stats(limit=limit)

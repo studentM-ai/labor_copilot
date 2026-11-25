@@ -230,3 +230,11 @@ app/schemas.py新增四个模型：合同文件，可用合同列表，上传结
 在src/retreiver.py下新增Milvus检索器，这个检索器的大致属性要与向量检索器差不多/
 在deps.py里设置利用环境变量切换检索器，新建022检索对比脚本得到结果/
 在低体量的数据量下，用numpy向量检索速度更快一些，所以默认用这个
+
+>Day21:做结构化日志，线上跑过的请求都能查到，结构化日志追加到一个文件里
+增加app/observability.py文件，里面有关于结构化日志与统计\
+在main里修改，生成id+响应头，增加stats接口;ask接口 入口设id，出口加头与写日志；在stream接口也设置请求id\
+修改streaming.py，流式统计token并且在finally写日志\
+最后测试成功得到日志，里面有关于token的以及状态的信息
+{"window": 11,"total": 11,"error_rate": 0,"latency_p50_ms": 5869,"latency_p95_ms": 24278,"latency_max_ms": 24278,
+...}大致是这样 
