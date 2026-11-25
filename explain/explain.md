@@ -238,3 +238,7 @@ app/schemas.py新增四个模型：合同文件，可用合同列表，上传结
 最后测试成功得到日志，里面有关于token的以及状态的信息
 {"window": 11,"total": 11,"error_rate": 0,"latency_p50_ms": 5869,"latency_p95_ms": 24278,"latency_max_ms": 24278,
 ...}大致是这样 
+
+>Day22: 对话历史截断与压缩，主要是控制对话历史的token量
+首先先修改deps.py,增加一个方法trim_history，得到要删除的信息；修改build_input_async，在里面加上删除记忆以及补回记忆的方法\
+

@@ -93,6 +93,10 @@ async def ask(req:AskRequest,x_user_id:str=Header(default="anonymous")):
   ts=time.perf_counter()
 
   async with deps.open_agent_async(rt,thread_id) as (agent,pool,config):
+    # 先记下本轮之前已有的消息 id
+    state=await agent.aget_state(config)
+    before_ids={getattr(m,"id",None) for m in (state.values or {}).get("messages") or [] if getattr(m,"id",None)}
+
     payload=await deps.build_input_async(rt,agent,config,req.question,x_user_id)
     try:
       result=await agent.ainvoke(
@@ -102,19 +106,25 @@ async def ask(req:AskRequest,x_user_id:str=Header(default="anonymous")):
     except Exception as e:
       raise HTTPException(status_code=500,detail=f"Agent执行失败:{e}")
 
+  # 只保留本轮新增的消息
+  # 用 id 集合判断，不能用 result["messages"][before:] 切片;截断会把前面的消息删掉，下标全变，切片会切错
+  new_msgs=[m for m in result["messages"] if getattr(m,"id",None) not in before_ids]
+
   #答案已经出来了，记忆抽取丢后台，不阻塞响应
   memory.spawn(memory.remember_turn(rt,x_user_id,req.question,result["messages"][-1].content or ""))
 
   elapsed_ms=int((time.perf_counter()-ts) * 1000) #本次耗时
   
   #非流式直接从最后一条AImessage的usage_metadata拿
-  tokens_in,tokens_out=observability.usage_of(result["messages"])
+  #token：只算本轮新增的那几条 AIMessage（不是整个会话）
+  tokens_in,tokens_out=observability.usage_of(new_msgs)
 
 
   # 最后一条消息就是最终答案
   answer = result["messages"][-1].content or ""
 
-  tool_calls = extract_tool_calls(result["messages"])
+  #工具：同样只算本轮的（否则前端每轮都会重复显示历史工具卡片）
+  tool_calls = extract_tool_calls(new_msgs)
 
   #写日志
   observability.log_event({

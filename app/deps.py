@@ -8,7 +8,7 @@
 import os,threading
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from langchain_core.messages import HumanMessage,SystemMessage
+from langchain_core.messages import HumanMessage,SystemMessage,RemoveMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver  #异步本地文件持久化
 from types import SimpleNamespace
 import re
@@ -50,6 +50,9 @@ _pools:dict[str,RefPool]={}
 # 每个池子里是这个会话检索过的法条原文，不封顶的话进程越跑占得越多。
 MAX_POOLS=200
 _pools_lock=threading.Lock()    #互斥锁
+
+#保留最近的原文条数，设置为6
+MAX_HISTORY_TURNS=6
 
 def init_runtime():
   """
@@ -148,6 +151,34 @@ async def open_agent_async(rt:Runtime,thread_id:str):
       await restore_pool_async(rt,agent,config,pool)
     yield agent,pool,config
 
+
+def trim_history(history,max_turns=MAX_HISTORY_TURNS):
+  """
+  算出需要删除的消息  
+  按HumanMessage边界切，因为一次工具调用是tool_calls+ToolMessage+AI三个连在一起的
+  """
+  #从后向前数，找到max_turns个HumanMessage的位置
+  seen=0  #统计已找到的用户消息条数
+  cut=0 #截断位置下标
+  
+  for i in range(len(history)-1,-1,-1):
+    if history[i].type=="human":
+      seen+=1
+      if seen ==max_turns:
+        cut=i
+        break
+
+  #cut之前的都删除，但system与没有id的不能删
+  drop=[]
+  for i in range(cut):
+    m=history[i]
+    if i==0 and m.type=="system":
+      continue
+    if not getattr(m,"id",None):
+      continue
+    drop.append(m)
+  return drop
+
 async def build_input_async(rt,agent,config,question:str,user_id:str="anonymous")->dict:
   """
   决定这一轮要往图里塞什么消息
@@ -157,12 +188,33 @@ async def build_input_async(rt,agent,config,question:str,user_id:str="anonymous"
 
   长期记忆只在新会话注入
   
+  截断会把用户说的条件删掉，所以这个时候必须用记忆补回来
   """
   state=await agent.aget_state(config)
   history=(state.values or {}).get("messages")or []
 
   if history:
-    return {"messages":[HumanMessage(content=question)]}
+    drop=trim_history(history)
+
+    #没超阈值：走原来的路
+    if not drop:
+      return {"messages":[HumanMessage(content=question)]}
+
+    #超了就先删除再用记忆补
+    msgs=[RemoveMessage(id=m.id) for m in drop]
+    block=""
+    if user_id and user_id !="anonymous":
+      block=await memory.memory_context(rt,user_id,question)
+
+    if block:
+      #这条SystemMessage是要把截掉的事实塞回来
+      msgs.append(SystemMessage(content="【关于这位用户的已知信息（早期对话已折叠）】\n"+block))
+      print(f"[deps] 截断 {len(drop)}条历史，用记忆补回：{block}",flush=True)
+    else:
+      print(f"[deps] 截断 {len(drop)}条历史（无记忆可补）",flush=True)
+
+    msgs.append(HumanMessage(content=question))
+    return {"messages":msgs}
 
   #新会话：先看有没有这个用户的记忆
   system=QA_PROMPT
@@ -170,7 +222,7 @@ async def build_input_async(rt,agent,config,question:str,user_id:str="anonymous"
     block=await memory.memory_context(rt,user_id,question)
     if block:
       system=system+"\n\n【关于这位用户的已知信息】\n"+block
-      print("[memory] 注入记忆：",block)
+      print("[deps] 注入记忆：",block,flush=True)
 
   return {"messages":[
     SystemMessage(content=system),
