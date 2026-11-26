@@ -4,6 +4,8 @@
 # ---- model & retrieval ----
 openai==1.109.1
 numpy==2.5.4
+# Milvus 客户端：长期记忆 + 可选的向量检索后端（D18/D19 加的，之前漏在 requirements 里）
+pymilvus==2.5.18
 sentence-transformers==6.2.0    # pulls in torch (~2 GB on first install)
 
 # ---- agent orchestration ----
