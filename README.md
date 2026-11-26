@@ -239,8 +239,8 @@ Milvus 的价值不在速度，在**元数据过滤 / 增量更新 / 多租户�
 # 1 环境
 pip install -r requirements.txt      # 注意 langchain-community 保持 0.3.30，单独升级会和 ragas 不兼容
 
-# 2 配 Key（写进 .env）
-echo DEEPSEEK_API_KEY=sk-xxxx > .env
+# 2 配 Key
+cp .env.example .env                 # 只有 DEEPSEEK_API_KEY 是必填的
 
 # 3 起服务（首次会下载 bge-m3 约 2.2 GB）
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
